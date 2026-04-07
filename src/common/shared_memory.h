@@ -286,7 +286,7 @@ private:
     size_t slot_pixel_size_;
     int current_slot_ = -1;
 
-    size_t getSlotOffset(uint32_t slot) const;
+    size_t getSlotOffset(uint32_t slot) const noexcept;
 };
 
 } // namespace vst3bridge

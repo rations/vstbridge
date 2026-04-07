@@ -31,10 +31,11 @@
 #include <windows.h>
 
 #include "vst3sdk.h"
-#include "ipc_host.h"
 #include "protocol.h"
 
 namespace vst3bridge {
+
+class WineSocketClient;
 
 /**
  * @brief IComponentHandler that forwards all callbacks over the IPC socket.
@@ -46,10 +47,10 @@ namespace vst3bridge {
 class ComponentHandler final : public Steinberg::IComponentHandler {
 public:
     /**
-     * @param ipc  IPC host used to send messages to the native side.
-     *             The caller must ensure ipc outlives this object.
+     * @param socket  Socket used to send messages to the native side.
+     *                The caller must ensure socket outlives this object.
      */
-    explicit ComponentHandler(IpcHost* ipc) noexcept;
+    ComponentHandler(WineSocketClient* socket);
     ~ComponentHandler() override = default;
 
     // Non-copyable, non-movable
@@ -58,7 +59,9 @@ public:
 
     // ---- FUnknown -----------------------------------------------------------
 
-    DECLARE_FUNKNOWN_METHODS
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID _iid, void** obj) override;
+    Steinberg::uint32 PLUGIN_API addRef() override;
+    Steinberg::uint32 PLUGIN_API release() override;
 
     // ---- IComponentHandler --------------------------------------------------
 
@@ -96,7 +99,7 @@ public:
     static const Steinberg::FUID iid;
 
 private:
-    IpcHost*          ipc_;
+    WineSocketClient* socket_;
     Steinberg::int32  refCount_;
 };
 

@@ -24,6 +24,7 @@
 
 #include "window_manager.h"
 #include <cstring>
+#include <algorithm>
 
 namespace vst3bridge {
 

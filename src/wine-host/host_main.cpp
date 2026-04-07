@@ -50,6 +50,7 @@
 
 #include "protocol.h"
 #include "logger.h"
+#include "parameter_changes.h"
 #include "vst3_host.h"
 #include "plugin_instance.h"
 #include "host_application.h"
@@ -516,10 +517,15 @@ private:
                 *reinterpret_cast<const MsgRequestSetProcessing*>(msg.payload.data()));
         }
 
-        case T::AudioProcess: {
-            if (!checkPayload(msg, sizeof(MsgAudioProcess))) return false;
-            return handleAudioProcess(
-                *reinterpret_cast<const MsgAudioProcess*>(msg.payload.data()));
+        case T::ParamChangesInput: {
+            if (!checkPayload(msg, sizeof(MsgParamChanges))) return false;
+            return handleParamChangesInput(msg);
+        }
+
+        case T::Process: {
+            if (!checkPayload(msg, sizeof(MsgProcess))) return false;
+            return handleProcess(
+                *reinterpret_cast<const MsgProcess*>(msg.payload.data()));
         }
 
         case T::GetTailSamples:
@@ -884,6 +890,14 @@ private:
             res = pluginInstance_->setupProcessing(setup);
 
             if (res == Steinberg::kResultOk) {
+                // Create the audio processor
+                if (!audioProcessor_) {
+                    audioProcessor_ = std::make_unique<AudioProcessor>(
+                        audioShm_.get(), &socket_,
+                        pluginInstance_->audioProcessor(),
+                        pluginInstance_->editController());
+                }
+
                 // After successful setup, send AudioReady so native side knows
                 // the Wine host is prepared for audio processing.
                 MsgAudioReady ready{};
@@ -936,33 +950,48 @@ private:
                                    &resp, sizeof(resp));
     }
 
+    bool handleParamChangesInput(const GenericMessage& msg) {
+        const MsgParamChanges* header = reinterpret_cast<const MsgParamChanges*>(msg.payload.data());
+        const uint32_t numChanges = header->num_changes;
+        const ParamChangePoint* changes = reinterpret_cast<const ParamChangePoint*>(
+            msg.payload.data() + sizeof(MsgParamChanges));
+
+        currentParamChanges_.clear();
+        for (uint32_t i = 0; i < numChanges; ++i) {
+            const ParamChangePoint& pc = changes[i];
+            int32_t index = 0;
+            Steinberg::IParamValueQueue* queue = currentParamChanges_.addParameterData(pc.param_id, index);
+            if (queue) {
+                queue->addPoint(pc.sample_offset, pc.value, index);
+            }
+        }
+        return true;  // No response needed
+    }
+
     /**
      * @brief Process one audio block.
      *
      * Audio data is in shared memory; the native side has already written
      * input samples there before sending this message.
      */
-    bool handleAudioProcess(const MsgAudioProcess& req) {
+    bool handleProcess(const MsgProcess& req) {
         if (!pluginInstance_ || !audioShm_) {
-            MsgProcessComplete resp{false};
-            return socket_.sendMessage(MsgType::ProcessComplete, &resp, sizeof(resp));
+            MsgResponseProcess resp{static_cast<int32_t>(Steinberg::kInternalError)};
+            return socket_.sendMessage(MsgType::ResponseProcess, &resp, sizeof(resp));
         }
 
         const uint32_t numSamples = req.num_samples;
 
         if (numSamples == 0 || numSamples > AudioBufferLayout::kMaxSamples) {
-            LOG_ERROR("WineHost::handleAudioProcess: invalid num_samples {}",
+            LOG_ERROR("WineHost::handleProcess: invalid num_samples {}",
                       numSamples);
-            MsgProcessComplete resp{false};
-            return socket_.sendMessage(MsgType::ProcessComplete, &resp, sizeof(resp));
+            MsgResponseProcess resp{static_cast<int32_t>(Steinberg::kInternalError)};
+            return socket_.sendMessage(MsgType::ResponseProcess, &resp, sizeof(resp));
         }
 
         // --- Build ProcessData ---
-        auto* layout = audioShm_->getLayout();
-
-        // Set up bus buffer arrays from scratch buffers
-        const uint32_t nIn  = layout->num_input_buses;
-        const uint32_t nOut = layout->num_output_buses;
+        const uint32_t nIn  = audioShm_->getNumInputs();
+        const uint32_t nOut = audioShm_->getNumOutputs();
 
         inputBuses_.resize(nIn);
         outputBuses_.resize(nOut);
@@ -970,36 +999,36 @@ private:
         outputPtrs_.resize(nOut);
 
         for (uint32_t b = 0; b < nIn; ++b) {
-            const uint32_t nCh = layout->input_bus_channels[b];
+            const uint32_t nCh = 1;  // Single channel per bus for simplicity
             inputBuses_[b].numChannels  = static_cast<Steinberg::int32>(nCh);
             inputBuses_[b].silenceFlags = 0;
             inputPtrs_[b].resize(nCh);
             for (uint32_t ch = 0; ch < nCh; ++ch) {
-                inputPtrs_[b][ch] = audioShm_->getInputChannel(b, ch);
+                inputPtrs_[b][ch] = audioShm_->getInputBuffer(b);
             }
             inputBuses_[b].channelBuffers32 = inputPtrs_[b].data();
         }
 
         for (uint32_t b = 0; b < nOut; ++b) {
-            const uint32_t nCh = layout->output_bus_channels[b];
+            const uint32_t nCh = 1;  // Single channel per bus for simplicity
             outputBuses_[b].numChannels  = static_cast<Steinberg::int32>(nCh);
             outputBuses_[b].silenceFlags = 0;
             outputPtrs_[b].resize(nCh);
             for (uint32_t ch = 0; ch < nCh; ++ch) {
-                outputPtrs_[b][ch] = audioShm_->getOutputChannel(b, ch);
+                outputPtrs_[b][ch] = audioShm_->getOutputBuffer(b);
             }
             outputBuses_[b].channelBuffers32 = outputPtrs_[b].data();
         }
 
         Steinberg::ProcessData data{};
-        data.processMode        = Steinberg::kRealtime;
-        data.symbolicSampleSize = Steinberg::kSample32;
-        data.numSamples         = static_cast<Steinberg::int32>(numSamples);
-        data.numInputs          = static_cast<Steinberg::int32>(nIn);
-        data.numOutputs         = static_cast<Steinberg::int32>(nOut);
-        data.inputs             = nIn  ? inputBuses_.data()  : nullptr;
-        data.outputs            = nOut ? outputBuses_.data() : nullptr;
-        // Parameter changes are populated by handleParamChanges() before
+        data.processMode            = Steinberg::kRealtime;
+        data.symbolicSampleSize     = Steinberg::kSample32;
+        data.numSamples             = static_cast<Steinberg::int32>(numSamples);
+        data.numInputs              = static_cast<Steinberg::int32>(nIn);
+        data.numOutputs             = static_cast<Steinberg::int32>(nOut);
+        data.inputs                 = nIn  ? inputBuses_.data()  : nullptr;
+        data.outputs                = nOut ? outputBuses_.data() : nullptr;
+        data.inputParameterChanges  = &currentParamChanges_;
         // this message arrives (if any were queued).
         data.inputParameterChanges  = nullptr;
         data.outputParameterChanges = nullptr;
@@ -1009,8 +1038,8 @@ private:
 
         Steinberg::tresult res = pluginInstance_->process(data);
 
-        MsgProcessComplete resp{res == Steinberg::kResultOk};
-        return socket_.sendMessage(MsgType::ProcessComplete, &resp, sizeof(resp));
+        MsgResponseProcess resp{static_cast<int32_t>(res)};
+        return socket_.sendMessage(MsgType::ResponseProcess, &resp, sizeof(resp));
     }
 
     bool handleGetTailSamples() {
@@ -1092,7 +1121,7 @@ private:
             if (!componentHandler_) {
                 // Create the Wine-side IComponentHandler proxy.
                 componentHandler_ = std::make_unique<ComponentHandler>(
-                    ipcHost_.get());
+                    &socket_);
             }
             res = pluginInstance_->setComponentHandler(
                 componentHandler_.get());
@@ -1142,6 +1171,11 @@ private:
                         stopCapture_ = false;
                         captureThread_ = std::thread(
                             &WineHost::captureLoop, this);
+
+                        // Start GUI event receiver
+                        guiEventReceiver_ = std::make_unique<GUIEventReceiver>(
+                            &socket_, pluginHwnd_);
+                        guiEventReceiver_->start();
                     }
                 }
             }
@@ -1334,11 +1368,13 @@ private:
 
     WineSocketClient                  socket_;
     VST3Host                          vst3Host_;
+    vst3bridge::ParameterChanges      currentParamChanges_;
     WindowManager                     windowManager_;
     std::unique_ptr<HostApplication>  hostApp_;
     std::unique_ptr<PluginInstance>   pluginInstance_;
+    std::unique_ptr<AudioProcessor>   audioProcessor_;
     std::unique_ptr<ComponentHandler> componentHandler_;
-    std::unique_ptr<IpcHost>          ipcHost_;   ///< For ComponentHandler
+    std::unique_ptr<GUIEventReceiver> guiEventReceiver_;
     std::unique_ptr<GDICapture>       gdiCapture_;
     std::unique_ptr<AudioSharedMemoryHost> audioShm_;
     // Frame shared memory is managed separately (owned by native side)

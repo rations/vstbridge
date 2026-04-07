@@ -24,8 +24,8 @@
 
 namespace vst3bridge {
 
-GUIEventReceiver::GUIEventReceiver(std::shared_ptr<IpcHost> ipc, HWND plugin_window)
-    : ipc_(ipc)
+GUIEventReceiver::GUIEventReceiver(WineSocketClient* socket, HWND plugin_window)
+    : socket_(socket)
     , plugin_window_(plugin_window) {
 }
 
@@ -68,7 +68,7 @@ void GUIEventReceiver::receiveLoop() {
     while (!stop_requested_.load()) {
         // Wait for GUI event message from native side
         GenericMessage msg;
-        if (!ipc_->receiveMessage(msg, 50)) {  // 50ms timeout
+        if (!socket_->receiveMessage(msg, 50)) {  // 50ms timeout
             continue;
         }
 

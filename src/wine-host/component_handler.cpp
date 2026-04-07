@@ -29,15 +29,25 @@ const Steinberg::FUID ComponentHandler::iid(
 // Constructor
 // ============================================================================
 
-ComponentHandler::ComponentHandler(IpcHost* ipc) noexcept
-    : ipc_(ipc), refCount_(1)
+ComponentHandler::ComponentHandler(WineSocketClient* socket)
+    : socket_(socket), refCount_(1)
 {}
 
 // ============================================================================
 // FUnknown
 // ============================================================================
 
-IMPLEMENT_REFCOUNT(ComponentHandler)
+Steinberg::uint32 PLUGIN_API ComponentHandler::addRef() {
+    return ++refCount_;
+}
+
+Steinberg::uint32 PLUGIN_API ComponentHandler::release() {
+    Steinberg::uint32 r = --refCount_;
+    if (r == 0) {
+        delete this;
+    }
+    return r;
+}
 
 Steinberg::tresult PLUGIN_API ComponentHandler::queryInterface(
         const Steinberg::TUID _iid, void** obj)
@@ -72,7 +82,7 @@ Steinberg::tresult PLUGIN_API ComponentHandler::beginEdit(Steinberg::uint32 id)
 
     LOG_DEBUG("ComponentHandler::beginEdit({})", id);
 
-    if (!ipc_->sendMessage(MsgType::ComponentHandlerBeginEdit, &msg, sizeof(msg))) {
+    if (!socket_->sendMessage(MsgType::ComponentHandlerBeginEdit, &msg, sizeof(msg))) {
         LOG_ERROR("ComponentHandler::beginEdit(): sendMessage failed");
         return Steinberg::kInternalError;
     }
@@ -90,7 +100,7 @@ Steinberg::tresult PLUGIN_API ComponentHandler::performEdit(
 
     LOG_TRACE("ComponentHandler::performEdit({}, {})", id, valueNormalized);
 
-    if (!ipc_->sendMessage(MsgType::ComponentHandlerPerformEdit, &msg, sizeof(msg))) {
+    if (!socket_->sendMessage(MsgType::ComponentHandlerPerformEdit, &msg, sizeof(msg))) {
         LOG_ERROR("ComponentHandler::performEdit(): sendMessage failed");
         return Steinberg::kInternalError;
     }
@@ -106,7 +116,7 @@ Steinberg::tresult PLUGIN_API ComponentHandler::endEdit(Steinberg::uint32 id)
 
     LOG_DEBUG("ComponentHandler::endEdit({})", id);
 
-    if (!ipc_->sendMessage(MsgType::ComponentHandlerEndEdit, &msg, sizeof(msg))) {
+    if (!socket_->sendMessage(MsgType::ComponentHandlerEndEdit, &msg, sizeof(msg))) {
         LOG_ERROR("ComponentHandler::endEdit(): sendMessage failed");
         return Steinberg::kInternalError;
     }
@@ -122,7 +132,7 @@ Steinberg::tresult PLUGIN_API ComponentHandler::restartComponent(Steinberg::int3
 
     LOG_INFO("ComponentHandler::restartComponent(flags=0x{:x})", static_cast<uint32_t>(flags));
 
-    if (!ipc_->sendMessage(MsgType::ComponentHandlerRestart, &msg, sizeof(msg))) {
+    if (!socket_->sendMessage(MsgType::ComponentHandlerRestart, &msg, sizeof(msg))) {
         LOG_ERROR("ComponentHandler::restartComponent(): sendMessage failed");
         return Steinberg::kInternalError;
     }

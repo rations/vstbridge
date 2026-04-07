@@ -76,6 +76,22 @@ public:
     float* getOutputBuffer(int channel);
 
     /**
+     * @brief Get input channel buffer
+     * @param bus Bus index
+     * @param ch Channel index within bus
+     * @return Pointer to buffer or nullptr
+     */
+    float* getInputChannel(uint32_t bus, uint32_t ch);
+
+    /**
+     * @brief Get output channel buffer
+     * @param bus Bus index
+     * @param ch Channel index within bus
+     * @return Pointer to buffer or nullptr
+     */
+    float* getOutputChannel(uint32_t bus, uint32_t ch);
+
+    /**
      * @brief Get number of input channels
      * @return Number of inputs
      */

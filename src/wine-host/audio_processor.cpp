@@ -24,12 +24,16 @@
 
 namespace vst3bridge {
 
-AudioProcessor::AudioProcessor(std::shared_ptr<AudioSharedMemoryHost> audio_shm,
-                               std::shared_ptr<IpcHost> ipc,
-                               IAudioProcessor* processor,
-                               IEditController* controller)
+using namespace Steinberg;
+
+const int kMaxBuses = 16;
+
+AudioProcessor::AudioProcessor(AudioSharedMemoryHost* audio_shm,
+                                WineSocketClient* socket,
+                                Steinberg::IAudioProcessor* processor,
+                                Steinberg::IEditController* controller)
     : audio_shm_(audio_shm)
-    , ipc_(ipc)
+    , socket_(socket)
     , processor_(processor)
     , controller_(controller) {
 }
@@ -74,7 +78,7 @@ void AudioProcessor::stop() {
     running_ = false;
 }
 
-bool AudioProcessor::setupBuses(int32 input_bus_count, int32 output_bus_count) {
+bool AudioProcessor::setupBuses(Steinberg::int32 input_bus_count, Steinberg::int32 output_bus_count) {
     if (!processor_) {
         return false;
     }
@@ -91,13 +95,13 @@ bool AudioProcessor::setupBuses(int32 input_bus_count, int32 output_bus_count) {
     input_channel_ptrs_.resize(input_bus_count);
     input_scratch_.resize(input_bus_count);
 
-    for (int32 bus = 0; bus < input_bus_count; bus++) {
+    for (Steinberg::int32 bus = 0; bus < input_bus_count; bus++) {
         SpeakerArrangement arrangement;
         if (processor_->getBusArrangement(kInput, bus, arrangement) != kResultTrue) {
-            arrangement = kStereo;  // Default to stereo
+            arrangement = Steinberg::SpeakerArr::kStereo;  // Default to stereo
         }
 
-        int32 channel_count = SpeakerArr::getChannelCount(arrangement);
+        Steinberg::int32 channel_count = SpeakerArr::getChannelCount(arrangement);
         if (channel_count == 0) {
             channel_count = 2;  // Default to stereo
         }
@@ -118,10 +122,10 @@ bool AudioProcessor::setupBuses(int32 input_bus_count, int32 output_bus_count) {
     for (int32 bus = 0; bus < output_bus_count; bus++) {
         SpeakerArrangement arrangement;
         if (processor_->getBusArrangement(kOutput, bus, arrangement) != kResultTrue) {
-            arrangement = kStereo;  // Default to stereo
+            arrangement = Steinberg::SpeakerArr::kStereo;  // Default to stereo
         }
 
-        int32 channel_count = SpeakerArr::getChannelCount(arrangement);
+        Steinberg::int32 channel_count = SpeakerArr::getChannelCount(arrangement);
         if (channel_count == 0) {
             channel_count = 2;  // Default to stereo
         }
@@ -163,36 +167,34 @@ void AudioProcessor::processingLoop() {
     audio_ready.output_bus_count = process_data_.numOutputs;
     
     // Count total channels per bus
-    for (int32 bus = 0; bus < process_data_.numInputs && bus < kMaxBuses; bus++) {
+    for (Steinberg::int32 bus = 0; bus < process_data_.numInputs && bus < kMaxBuses; bus++) {
         audio_ready.input_bus_channels[bus] = input_buses_[bus].numChannels;
     }
-    for (int32 bus = 0; bus < process_data_.numOutputs && bus < kMaxBuses; bus++) {
+    for (Steinberg::int32 bus = 0; bus < process_data_.numOutputs && bus < kMaxBuses; bus++) {
         audio_ready.output_bus_channels[bus] = output_buses_[bus].numChannels;
     }
 
-    ipc_->sendMessage(MsgType::AudioReady, &audio_ready, sizeof(audio_ready));
+    socket_->sendMessage(MsgType::AudioReady, &audio_ready, sizeof(audio_ready));
 
     // Main processing loop
     while (!stop_requested_.load()) {
         // Wait for AudioProcess message from native side
         GenericMessage msg;
-        if (!ipc_->receiveMessage(msg, 100)) {  // 100ms timeout
+        if (!socket_->receiveMessage(msg, 100)) {  // 100ms timeout
             continue;
         }
 
-        if (msg.header.type != MsgType::AudioProcess) {
+        if (msg.header.type != MsgType::Process) {
             continue;
         }
 
-        const auto* process_msg = reinterpret_cast<const MsgAudioProcess*>(msg.payload.data());
+        const auto* process_msg = reinterpret_cast<const MsgProcess*>(msg.payload.data());
         uint32_t num_samples = process_msg->num_samples;
 
         if (num_samples == 0 || num_samples > 8192) {
             // Invalid sample count
-            MsgProcessComplete complete;
-            complete.success = false;
-            complete.output_samples = 0;
-            ipc_->sendMessage(MsgType::ProcessComplete, &complete, sizeof(complete));
+            MsgResponseProcess resp{static_cast<Steinberg::int32>(Steinberg::kInternalError)};
+            socket_->sendMessage(MsgType::ResponseProcess, &resp, sizeof(resp));
             continue;
         }
 
@@ -200,10 +202,8 @@ void AudioProcessor::processingLoop() {
         bool success = processBuffer(num_samples);
 
         // Send completion message
-        MsgProcessComplete complete;
-        complete.success = success;
-        complete.output_samples = success ? num_samples : 0;
-        ipc_->sendMessage(MsgType::ProcessComplete, &complete, sizeof(complete));
+        MsgResponseProcess resp{static_cast<Steinberg::int32>(success ? Steinberg::kResultOk : Steinberg::kInternalError)};
+        socket_->sendMessage(MsgType::ResponseProcess, &resp, sizeof(resp));
     }
 }
 
@@ -220,7 +220,7 @@ bool AudioProcessor::processBuffer(uint32_t num_samples) {
 
     // Set up channel buffer pointers
     for (size_t bus = 0; bus < input_buses_.size(); bus++) {
-        for (int32 ch = 0; ch < input_buses_[bus].numChannels; ch++) {
+        for (Steinberg::int32 ch = 0; ch < input_buses_[bus].numChannels; ch++) {
             input_channel_ptrs_[bus][ch] = input_scratch_[bus].data() + ch * num_samples;
         }
         input_buses_[bus].channelBuffers32 = input_channel_ptrs_[bus].data();
@@ -237,14 +237,14 @@ bool AudioProcessor::processBuffer(uint32_t num_samples) {
     updateParameters();
 
     // Process audio
-    tresult result = processor_->process(process_data_);
+    Steinberg::tresult result = processor_->process(process_data_);
 
     // Copy output audio to shared memory
-    if (result == kResultTrue) {
+    if (result == Steinberg::kResultTrue) {
         copyToSharedMemory(num_samples);
     }
 
-    return result == kResultTrue;
+    return result == Steinberg::kResultTrue;
 }
 
 void AudioProcessor::copyFromSharedMemory(uint32_t num_samples) {
@@ -252,7 +252,7 @@ void AudioProcessor::copyFromSharedMemory(uint32_t num_samples) {
 
     // Copy input audio from shared memory to scratch buffers
     for (size_t bus = 0; bus < input_buses_.size(); bus++) {
-        for (int32 ch = 0; ch < input_buses_[bus].numChannels; ch++) {
+        for (Steinberg::int32 ch = 0; ch < input_buses_[bus].numChannels; ch++) {
             float* dst = input_scratch_[bus].data() + ch * num_samples;
             float* src = audio_shm_->getInputChannel(static_cast<uint32_t>(bus), static_cast<uint32_t>(ch));
             

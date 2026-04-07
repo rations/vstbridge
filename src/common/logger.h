@@ -109,7 +109,7 @@ public:
 
         char timebuf[32];
         std::tm tm_info{};
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(__WINE__)
         localtime_s(&tm_info, &tt);
 #else
         localtime_r(&tt, &tm_info);

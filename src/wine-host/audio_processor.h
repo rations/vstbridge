@@ -21,15 +21,13 @@
 #pragma once
 
 #include "audio_shm_host.h"
-#include "ipc_host.h"
-#include "parameter_changes.h"
-#include <vst3sdk.h>
-#include <thread>
-#include <atomic>
-#include <memory>
-#include <vector>
+#include <windows.h>
+#include <cstring>
+#include <iostream>
 
 namespace vst3bridge {
+
+class WineSocketClient;
 
 /**
  * @brief Handles audio processing in the Wine host process
@@ -42,14 +40,14 @@ public:
     /**
      * @brief Construct audio processor
      * @param audio_shm Audio shared memory host interface
-     * @param ipc IPC host for communication
+     * @param socket Socket for communication
      * @param plugin VST3 plugin component
      * @param controller VST3 edit controller (may be same as component)
      */
-    AudioProcessor(std::shared_ptr<AudioSharedMemoryHost> audio_shm,
-                   std::shared_ptr<IpcHost> ipc,
-                   IAudioProcessor* processor,
-                   IEditController* controller);
+    AudioProcessor(AudioSharedMemoryHost* audio_shm,
+                    WineSocketClient* socket,
+                    Steinberg::IAudioProcessor* processor,
+                    Steinberg::IEditController* controller);
 
     ~AudioProcessor();
 
@@ -75,7 +73,7 @@ public:
      * @param output_bus_count Number of output buses
      * @return true if successful
      */
-    bool setupBuses(int32 input_bus_count, int32 output_bus_count);
+    bool setupBuses(Steinberg::int32 input_bus_count, Steinberg::int32 output_bus_count);
 
 private:
     /**
@@ -107,19 +105,19 @@ private:
      */
     void updateParameters();
 
-    std::shared_ptr<AudioSharedMemoryHost> audio_shm_;
-    std::shared_ptr<IpcHost> ipc_;
-    IAudioProcessor* processor_;
-    IEditController* controller_;
+    AudioSharedMemoryHost* audio_shm_;
+    WineSocketClient* socket_;
+    Steinberg::IAudioProcessor* processor_;
+    Steinberg::IEditController* controller_;
 
     std::thread processing_thread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> stop_requested_{false};
 
     // VST3 processing data
-    ProcessData process_data_;
-    std::vector<AudioBusBuffers> input_buses_;
-    std::vector<AudioBusBuffers> output_buses_;
+    Steinberg::ProcessData process_data_;
+    std::vector<Steinberg::AudioBusBuffers> input_buses_;
+    std::vector<Steinberg::AudioBusBuffers> output_buses_;
     std::vector<std::vector<float*>> input_channel_ptrs_;
     std::vector<std::vector<float*>> output_channel_ptrs_;
     

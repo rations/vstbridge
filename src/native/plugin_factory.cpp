@@ -95,13 +95,13 @@ tresult PLUGIN_API PluginFactory::getClassInfo(int32 index, PClassInfo* info) {
     return kInvalidArgument;
 }
 
-tresult PLUGIN_API PluginFactory::createInstance(FUID cid, FUID _iid, void** obj) {
+tresult PLUGIN_API PluginFactory::createInstance(TUID cid, TUID _iid, void** obj) {
     if (!obj) return kInvalidArgument;
     *obj = nullptr;
 
     MsgRequestCreateInstance request;
-    request.cid = cid;
-    request.iid = _iid;
+    std::memcpy(request.cid, cid, sizeof(TUID));
+    std::memcpy(request.iid, _iid, sizeof(TUID));
 
     if (!socket_->sendMessage(MsgType::CreateInstance,
                               &request, sizeof(request))) {
@@ -205,23 +205,25 @@ tresult PLUGIN_API PluginFactory::setHostContext(FUnknown* context) {
 }
 
 // FUnknown implementation
-tresult PLUGIN_API PluginFactory::queryInterface(const FUID& _iid, void** obj) {
+tresult PLUGIN_API PluginFactory::queryInterface(const TUID _iid, void** obj) {
     if (!obj) return kInvalidArgument;
     *obj = nullptr;
 
-    if (_iid == IPluginFactory_iid || _iid == FUnknown_iid) {
+    FUID requested(_iid);
+
+    if (requested == IPluginFactory::iid || requested == FUnknown::iid) {
         *obj = static_cast<IPluginFactory*>(this);
         addRef();
         return kResultOk;
     }
 
-    if (_iid == IPluginFactory2_iid) {
+    if (requested == IPluginFactory2::iid) {
         *obj = static_cast<IPluginFactory2*>(this);
         addRef();
         return kResultOk;
     }
 
-    if (_iid == IPluginFactory3_iid) {
+    if (requested == IPluginFactory3::iid) {
         *obj = static_cast<IPluginFactory3*>(this);
         addRef();
         return kResultOk;

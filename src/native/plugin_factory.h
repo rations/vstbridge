@@ -50,8 +50,8 @@ public:
     Steinberg::int32 PLUGIN_API countClasses() override;
     Steinberg::tresult PLUGIN_API getClassInfo(Steinberg::int32 index, 
                                                Steinberg::PClassInfo* info) override;
-    Steinberg::tresult PLUGIN_API createInstance(Steinberg::FUID cid, 
-                                                 Steinberg::FUID _iid, 
+    Steinberg::tresult PLUGIN_API createInstance(Steinberg::TUID cid, 
+                                                 Steinberg::TUID _iid, 
                                                  void** obj) override;
 
     // IPluginFactory2 implementation
@@ -64,7 +64,7 @@ public:
     Steinberg::tresult PLUGIN_API setHostContext(Steinberg::FUnknown* context) override;
 
     // FUnknown implementation
-    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::FUID& _iid, 
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID _iid, 
                                                  void** obj) override;
     Steinberg::uint32 PLUGIN_API addRef() override;
     Steinberg::uint32 PLUGIN_API release() override;

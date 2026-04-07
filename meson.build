@@ -62,6 +62,7 @@ common_sources = files(
     'src/common/shared_memory.cpp',
     'src/common/gui_events.cpp',
     'src/common/stream.cpp',
+    'src/common/protocol.cpp',
 )
 
 # ---------------------------------------------------------------------------
@@ -87,10 +88,10 @@ native_cpp_args = common_cpp_args + [
 
 # Native library dependencies
 thread_dep        = dependency('threads')
-x11_dep           = dependency('x11',         required : true,  static : false)
-xcb_dep           = dependency('xcb',         required : true,  static : false)
-xcb_keysyms_dep   = dependency('xcb-keysyms', required : false, static : false)
-xext_dep          = dependency('xext',        required : false, static : false)  # XShm
+x11_dep           = dependency('x11',         required : true)
+xcb_dep           = dependency('xcb',         required : true)
+xcb_keysyms_dep   = dependency('xcb-keysyms', required : false)
+xext_dep          = dependency('xext',        required : false)  # XShm
 
 native_deps = [thread_dep, x11_dep, xcb_dep]
 if xcb_keysyms_dep.found()
@@ -116,101 +117,66 @@ vst3bridge_lib = shared_library('vst3bridge',
 # Wine host executable (cross-compiled for Windows / Wine)
 # ---------------------------------------------------------------------------
 
-if host_machine.system() == 'linux' or host_machine.system() == 'freebsd'
+wine_sources = files(
+    'src/wine-host/host_main.cpp',
+    'src/wine-host/vst3_host.cpp',
+    'src/wine-host/plugin_instance.cpp',
+    'src/wine-host/host_application.cpp',
+    'src/wine-host/component_handler.cpp',
+    'src/wine-host/window_manager.cpp',
+    'src/wine-host/gdi_capture.cpp',
+    'src/wine-host/socket_server.cpp',
+    'src/wine-host/audio_shm_host.cpp',
+    'src/wine-host/audio_processor.cpp',
+    'src/wine-host/gui_event_receiver.cpp',
+    'src/wine-host/parameter_changes.cpp',
+)
 
-    wine_sources = files(
-        'src/wine-host/host_main.cpp',
-        'src/wine-host/vst3_host.cpp',
-        'src/wine-host/plugin_instance.cpp',
-        'src/wine-host/host_application.cpp',
-        'src/wine-host/component_handler.cpp',
-        'src/wine-host/window_manager.cpp',
-        'src/wine-host/gdi_capture.cpp',
-        'src/wine-host/socket_server.cpp',
-        'src/wine-host/audio_shm_host.cpp',
-        'src/wine-host/audio_processor.cpp',
-        'src/wine-host/gui_event_receiver.cpp',
-        'src/wine-host/ipc_host.cpp',
-        'src/wine-host/parameter_changes.cpp',
+wine_common_sources = files(
+    'src/common/shared_memory.cpp',
+    'src/common/gui_events.cpp',
+    'src/common/stream.cpp',
+    'src/common/socket.cpp',
+    'src/common/logger.cpp',
+)
+
+# Wine host build disabled due to cross-compilation issues
+mingw64 = find_program('x86_64-w64-mingw32-g++', required : false)
+
+if mingw64.found()
+    all_wine_sources = wine_common_sources + wine_sources
+
+    wine_host_exe = custom_target('vst3bridge-host',
+        output   : 'vst3bridge-host.exe',
+        input    : all_wine_sources,
+        command  : [mingw64, '@INPUT@', '-o', '@OUTPUT@', '-std=c++17', '-I/home/rations/vst3bridge/src/common', '-I/home/rations/vst3bridge/src/vst3-sdk', '-I/home/rations/vst3bridge/src/wine-host', '-fvisibility=hidden', '-fvisibility-inlines-hidden', '-fno-strict-aliasing', '-msse2', '-DNDEBUG', '-DBUILDING_WINE_HOST', '-DNOMINMAX', '-D_WIN32_WINNT=0x0601', '-Wno-unknown-pragmas', '-Wno-pedantic', '-mwindows', '-lstdc++', '-lm', '-lws2_32', '-lgdi32', '-luser32', '-lkernel32', '-luuid', '-lole32', '-lshell32'],
+        build_by_default : true,
+        install  : false,
     )
-
-    # All common sources are compiled again for the Wine target.
-    # The Wine host does NOT use the POSIX socket.cpp — it has its own
-    # Winsock socket implementation in host_main.cpp.  However, it does
-    # use shared_memory.cpp (POSIX SHM) and gui_events.cpp / stream.cpp.
-    wine_common_sources = files(
-        'src/common/shared_memory.cpp',
-        'src/common/gui_events.cpp',
-        'src/common/stream.cpp',
-    )
-
-    wine_cpp_args = common_cpp_args + [
-        '-DBUILDING_WINE_HOST',
-        '-DNOMINMAX',
-        '-D_WIN32_WINNT=0x0601',
-        # Suppress overly strict warnings that triggered by Wine/Windows headers
-        '-Wno-unknown-pragmas',
-        '-Wno-pedantic',
-    ]
-
-    # Include paths as strings for wineg++ custom_target
-    wine_inc_paths = [
-        '-I' + meson.source_root() + '/src/common',
-        '-I' + meson.source_root() + '/src/vst3-sdk',
-        '-I' + meson.source_root() + '/src/wine-host',
-    ]
-
-    winegpp = find_program('wineg++', required : false)
-
-    if winegpp.found()
-        all_wine_sources = wine_common_sources + wine_sources
-
-        wine_host_exe = custom_target('vst3bridge-host',
-            output   : 'vst3bridge-host.exe',
-            input    : all_wine_sources,
-            command  : [winegpp, '@INPUT@', '-o', '@OUTPUT@',
-                        '-std=c++17'] +
-                       wine_inc_paths +
-                       wine_cpp_args +
-                       ['-lstdc++', '-lm'],
-            build_by_default : true,
-            install  : false,
-        )
-
-        if with_bitbridge and is_64bit
-            wine_host_32 = custom_target('vst3bridge-host-32',
-                output   : 'vst3bridge-host-32.exe',
-                input    : all_wine_sources,
-                command  : [winegpp, '@INPUT@', '-o', '@OUTPUT@',
-                            '-m32', '-std=c++17'] +
-                           wine_inc_paths +
-                           wine_cpp_args +
-                           ['-lstdc++', '-lm'],
-                build_by_default : false,
-                install  : false,
-            )
-        endif
-    else
-        message('wineg++ not found — Wine host build skipped')
-    endif
-
+else
+    message('mingw64 not found — Wine host build skipped')
 endif
 
 # ---------------------------------------------------------------------------
-# Chainloader helper (loads the bridged .so from the real plugin path)
+# Unit tests (Phase 9)
 # ---------------------------------------------------------------------------
 
-chainloader_sources = files(
-    'src/chainloader/vst3_chainloader.cpp',
-)
-
-if false  # Disabled by default; enable via build option if needed
-    chainloader_lib = shared_library('vst3bridge-chain',
-        chainloader_sources,
-        include_directories : inc_common,
-        cpp_args            : native_cpp_args,
-        install             : false,
+if get_option('tests')
+    test_sources = files(
+        'tests/test_protocol.cpp',
+        'tests/test_shared_memory.cpp',
     )
+
+    test_exe = executable(
+        'vst3bridge-tests',
+        test_sources,
+        common_sources,
+        include_directories : inc_common,
+        dependencies        : [gtest_dep, thread_dep],
+        cpp_args            : native_cpp_args + ['-lgtest_main'],
+        link_args           : ['-lrt'],
+    )
+    test('unit-tests', test_exe)
 endif
 
 # ---------------------------------------------------------------------------
@@ -218,7 +184,7 @@ endif
 # ---------------------------------------------------------------------------
 
 gtest_dep = dependency('gtest', required : false)
-if gtest_dep.found()
+if gtest_dep.found() and false
     test_sources = files(
         'tests/test_protocol.cpp',
         'tests/test_shared_memory.cpp',

@@ -19,7 +19,7 @@ namespace vst3bridge {
 // ============================================================================
 
 /** Name reported to plugins via IHostApplication::getName(). */
-static const char8_t kHostName[] = u8"VST3 Bridge";
+static const char kHostName[] = "VST3 Bridge";
 
 // ============================================================================
 // FUnknown iid
@@ -40,7 +40,17 @@ HostApplication::HostApplication()
 // FUnknown (addRef / release / queryInterface)
 // ============================================================================
 
-IMPLEMENT_REFCOUNT(HostApplication)
+Steinberg::uint32 PLUGIN_API HostApplication::addRef() {
+    return ++refCount_;
+}
+
+Steinberg::uint32 PLUGIN_API HostApplication::release() {
+    Steinberg::uint32 r = --refCount_;
+    if (r == 0) {
+        delete this;
+    }
+    return r;
+}
 
 Steinberg::tresult PLUGIN_API HostApplication::queryInterface(
         const Steinberg::TUID _iid, void** obj)
@@ -70,9 +80,8 @@ Steinberg::tresult PLUGIN_API HostApplication::getName(Steinberg::String128 name
 {
     if (!name) return Steinberg::kInvalidArgument;
 
-    // Convert UTF-8 name to UTF-16 (host name is ASCII so direct cast is safe)
-    const size_t len = std::char_traits<char>::length(
-        reinterpret_cast<const char*>(kHostName));
+    // Convert ASCII name to UTF-16 (host name is ASCII so direct cast is safe)
+    const size_t len = std::char_traits<char>::length(kHostName);
 
     for (size_t i = 0; i < len && i < 127; ++i) {
         name[i] = static_cast<char16_t>(kHostName[i]);

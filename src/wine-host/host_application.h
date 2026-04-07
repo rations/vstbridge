@@ -31,7 +31,9 @@ class HostApplication final : public Steinberg::IHostApplication {
 public:
     HostApplication();
 
-    DECLARE_FUNKNOWN_METHODS
+    Steinberg::tresult PLUGIN_API queryInterface(const Steinberg::TUID _iid, void** obj) override;
+    Steinberg::uint32 PLUGIN_API addRef() override;
+    Steinberg::uint32 PLUGIN_API release() override;
 
     // ---- IHostApplication --------------------------------------------------
 

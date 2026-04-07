@@ -95,7 +95,7 @@ std::unique_ptr<PluginInstance> PluginInstance::create(
 
     void* rawComponent = nullptr;
     Steinberg::tresult res = factory->createInstance(
-            const_cast<Steinberg::TUID>(cid), iComponentId, &rawComponent);
+            const_cast<char*>(cid), iComponentId, &rawComponent);
 
     if (res != Steinberg::kResultOk || !rawComponent) {
         LOG_ERROR("PluginInstance: createInstance() failed (result {})",

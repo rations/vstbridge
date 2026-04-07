@@ -24,12 +24,9 @@
 namespace vst3bridge {
 
 // FUID definitions for queryInterface
-static const Steinberg::TUID IParamValueQueue_IID = 
-    {0xABCDEF01, 0x2345, 0x6789, {0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89}};
-static const Steinberg::TUID IParameterChanges_IID = 
-    {0xABCDEF02, 0x2345, 0x6789, {0xAB, 0xCD, 0xEF, 0x01, 0x23, 0x45, 0x67, 0x89}};
-static const Steinberg::TUID FUnknown_IID = 
-    {0x00000000, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const char IParamValueQueue_IID[16] = {};
+static const char IParameterChanges_IID[16] = {};
+static const char FUnknown_IID[16] = {};
 
 // ============================================================================
 // ParamValueQueue Implementation

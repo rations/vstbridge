@@ -488,14 +488,13 @@ struct MsgAudioReady {
  * sending this message.  The Wine host reads SHM → processes → writes
  * output SHM → sends ProcessComplete.
  */
-struct MsgAudioProcess {
+struct MsgProcess {
     uint32_t num_samples;
     uint32_t flags;          ///< Reserved, must be 0
 };
 
-struct MsgProcessComplete {
-    bool    success;
-    uint8_t _pad[3];
+struct MsgResponseProcess {
+    int32_t result;
 };
 
 struct MsgRequestGetTailSamples {};

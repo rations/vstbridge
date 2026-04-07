@@ -24,6 +24,7 @@
 #include "audio_shm_host.h"
 #include <windows.h>
 #include <cstring>
+#include <string>
 
 namespace vst3bridge {
 
@@ -87,7 +88,7 @@ float* AudioSharedMemoryHost::getInputBuffer(int channel) {
     // Access the layout structure
     auto* layout = static_cast<AudioBufferLayout*>(data_);
     
-    if (channel < 0 || channel >= static_cast<int>(layout->num_inputs)) {
+    if (channel < 0 || channel >= static_cast<int>(layout->num_input_buses)) {
         return nullptr;
     }
     
@@ -101,7 +102,7 @@ float* AudioSharedMemoryHost::getOutputBuffer(int channel) {
     // Access the layout structure
     auto* layout = static_cast<AudioBufferLayout*>(data_);
     
-    if (channel < 0 || channel >= static_cast<int>(layout->num_outputs)) {
+    if (channel < 0 || channel >= static_cast<int>(layout->num_output_buses)) {
         return nullptr;
     }
     
@@ -112,13 +113,13 @@ float* AudioSharedMemoryHost::getOutputBuffer(int channel) {
 uint32_t AudioSharedMemoryHost::getNumInputs() const {
     if (!data_) return 0;
     auto* layout = static_cast<AudioBufferLayout*>(data_);
-    return layout->num_inputs;
+    return layout->num_input_buses;
 }
 
 uint32_t AudioSharedMemoryHost::getNumOutputs() const {
     if (!data_) return 0;
     auto* layout = static_cast<AudioBufferLayout*>(data_);
-    return layout->num_outputs;
+    return layout->num_output_buses;
 }
 
 uint32_t AudioSharedMemoryHost::getNumSamples() const {
@@ -130,14 +131,26 @@ uint32_t AudioSharedMemoryHost::getNumSamples() const {
 void AudioSharedMemoryHost::setChannelCounts(uint32_t num_inputs, uint32_t num_outputs) {
     if (!data_) return;
     auto* layout = static_cast<AudioBufferLayout*>(data_);
-    layout->num_inputs = num_inputs;
-    layout->num_outputs = num_outputs;
+    layout->num_input_buses = num_inputs;
+    layout->num_output_buses = num_outputs;
 }
 
 void AudioSharedMemoryHost::setNumSamples(uint32_t num_samples) {
     if (!data_) return;
     auto* layout = static_cast<AudioBufferLayout*>(data_);
     layout->num_samples = num_samples;
+}
+
+float* AudioSharedMemoryHost::getInputChannel(uint32_t bus, uint32_t ch) {
+    // TODO: Implement proper bus/channel mapping
+    (void)bus;
+    return getInputBuffer(static_cast<int>(ch));
+}
+
+float* AudioSharedMemoryHost::getOutputChannel(uint32_t bus, uint32_t ch) {
+    // TODO: Implement proper bus/channel mapping
+    (void)bus;
+    return getOutputBuffer(static_cast<int>(ch));
 }
 
 void AudioSharedMemoryHost::shutdown() {

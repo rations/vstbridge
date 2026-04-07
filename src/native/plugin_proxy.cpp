@@ -427,31 +427,62 @@ tresult PLUGIN_API PluginProxy::process(ProcessData& data) {
         }
     }
 
-    // ---- Send AudioProcess and wait for ProcessComplete -----
+    // ---- Send parameter changes if any -----
+    if (data.inputParameterChanges) {
+        std::lock_guard<std::mutex> lock(socket_mutex_);
+        // Serialize parameter changes
+        std::vector<ParamChangePoint> changes;
+        const int32 numParams = data.inputParameterChanges->getParameterCount();
+        for (int32 i = 0; i < numParams; ++i) {
+            IParamValueQueue* queue = data.inputParameterChanges->getParameterData(i);
+            if (!queue) continue;
+            const int32 numPoints = queue->getPointCount();
+            for (int32 p = 0; p < numPoints; ++p) {
+                int32 sampleOffset;
+                ParamValue value;
+                if (queue->getPoint(p, sampleOffset, value) == kResultOk) {
+                    changes.push_back({static_cast<uint32_t>(queue->getParameterId()), sampleOffset, value});
+                }
+            }
+        }
+        if (!changes.empty()) {
+            MsgParamChanges header{static_cast<uint32_t>(changes.size()), 0};
+            // Send header + changes
+            std::vector<uint8_t> payload(sizeof(header) + changes.size() * sizeof(ParamChangePoint));
+            std::memcpy(payload.data(), &header, sizeof(header));
+            std::memcpy(payload.data() + sizeof(header), changes.data(), changes.size() * sizeof(ParamChangePoint));
+            if (!socket_->sendMessage(MsgType::ParamChangesInput, payload.data(), payload.size())) {
+                LOG_ERROR("PluginProxy::process(): sendMessage ParamChangesInput failed");
+                return kInternalError;
+            }
+        }
+    }
+
+    // ---- Send Process and wait for ResponseProcess -----
     {
         std::lock_guard<std::mutex> lock(socket_mutex_);
 
-        MsgAudioProcess req{};
+        MsgProcess req{};
         req.num_samples = ns;
         req.flags       = 0;
 
-        if (!socket_->sendMessage(MsgType::AudioProcess, &req, sizeof(req))) {
+        if (!socket_->sendMessage(MsgType::Process, &req, sizeof(req))) {
             LOG_ERROR("PluginProxy::process(): sendMessage failed");
             return kInternalError;
         }
 
-        MsgProcessComplete resp{};
+        MsgResponseProcess resp{};
         MsgType respType;
         if (!socket_->receiveMessage(&resp, sizeof(resp), respType) ||
-            respType != MsgType::ProcessComplete)
+            respType != MsgType::ResponseProcess)
         {
-            LOG_ERROR("PluginProxy::process(): expected ProcessComplete, got 0x{:x}",
+            LOG_ERROR("PluginProxy::process(): expected ResponseProcess, got 0x{:x}",
                       static_cast<uint32_t>(respType));
             return kInternalError;
         }
 
-        if (!resp.success) {
-            return kInternalError;
+        if (resp.result != kResultOk) {
+            return static_cast<tresult>(resp.result);
         }
     }
 

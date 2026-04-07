@@ -72,6 +72,12 @@ public:
     int getHeight() const;
 
 private:
+    /**
+     * @brief Clean up GDI resources
+     */
+    void cleanup();
+
+private:
     HWND hwnd_ = nullptr;
     HDC hdc_window_ = nullptr;
     HDC hdc_mem_ = nullptr;

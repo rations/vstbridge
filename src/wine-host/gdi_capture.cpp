@@ -22,6 +22,11 @@
  */
 
 #include "gdi_capture.h"
+
+// CAPTUREBLT flag for capturing layered windows
+#ifndef CAPTUREBLT
+#define CAPTUREBLT 0x40000000
+#endif
 #include <cstring>
 #include <vector>
 #include <algorithm>
