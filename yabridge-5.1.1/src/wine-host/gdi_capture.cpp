@@ -81,8 +81,6 @@ bool GdiCapture::capture(uint8_t* buf) noexcept {
         if (!initialize(hwnd_)) return false;
     }
 
-    // BitBlt reads the window's backing store via its own DC — works for
-    // windows parented off-screen without any cross-thread SendMessage.
     if (!BitBlt(hdc_mem_, 0, 0, width_, height_, hdc_window_, 0, 0,
                 SRCCOPY | CAPTUREBLT))
         return false;

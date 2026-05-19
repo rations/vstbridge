@@ -47,6 +47,7 @@ if with_vst3
     tomlplusplus_dep,
     vst3_sdk_native_dep,
     dependency('xcb', native : true),
+    dependency('xcb-composite', native : true),
     dependency('x11', native : true),
   ]
 endif

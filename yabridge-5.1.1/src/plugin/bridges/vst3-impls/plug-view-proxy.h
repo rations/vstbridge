@@ -243,6 +243,9 @@ class Vst3PlugViewProxyImpl : public Vst3PlugViewProxy {
     // Stored so the render thread can recreate the window if the connection dies
     xcb_window_t render_parent_xid_ = 0;
     uint32_t render_event_mask_ = 0;
+    // XComposite: the Wine container XID and its backing pixmap
+    xcb_window_t composite_xid_ = 0;
+    xcb_pixmap_t composite_pixmap_ = 0;
     std::atomic<bool> render_running_{false};
     std::thread render_thread_;
 

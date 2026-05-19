@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <thread>
+#include <xcb/composite.h>
 #include <xcb/xcb.h>
 
 RunLoopTasks::RunLoopTasks(Steinberg::IPtr<Steinberg::IPlugFrame> plug_frame)
@@ -168,25 +169,29 @@ tresult PLUGIN_API Vst3PlugViewProxyImpl::attached(void* parent,
             xcb_setup_roots_iterator(xcb_get_setup(render_x11_)).data;
 
         render_window_ = xcb_generate_id(render_x11_);
-        // XCB_COPY_FROM_PARENT for both depth and visual so the child window
-        // inherits the parent's depth/visual. Reaper's FX panels may be
-        // depth-32 ARGB; using root_visual (depth-24) here causes BadMatch and
-        // silently drops the window-creation request.
-        xcb_create_window(render_x11_, XCB_COPY_FROM_PARENT, render_window_,
+        // Use root depth/visual/colormap so it matches the composite pixmap
+        // from gdi_hide_container_ (also root depth). Specifying CW_COLORMAP
+        // with the default colormap allows a depth-24 child even under a
+        // depth-32 ARGB parent (Reaper FX panels) without BadMatch.
+        const uint32_t rw_vals[] = {render_event_mask_,
+                                     screen->default_colormap};
+        xcb_create_window(render_x11_, screen->root_depth, render_window_,
                           render_parent_xid_, 0, 0, 1, 1, 0,
-                          XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT,
-                          XCB_CW_EVENT_MASK, &render_event_mask_);
+                          XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual,
+                          XCB_CW_EVENT_MASK | XCB_CW_COLORMAP, rw_vals);
         xcb_map_window(render_x11_, render_window_);
         xcb_flush(render_x11_);
-
-        // Query actual window depth (must match xcb_put_image depth arg).
-        xcb_get_geometry_reply_t* geom = xcb_get_geometry_reply(
-            render_x11_, xcb_get_geometry(render_x11_, render_window_), nullptr);
-        render_depth_ = geom ? geom->depth : screen->root_depth;
-        if (geom) free(geom);
+        render_depth_ = screen->root_depth;
 
         render_gc_ = xcb_generate_id(render_x11_);
         xcb_create_gc(render_x11_, render_gc_, render_window_, 0, nullptr);
+
+        // Publish render_window_ XID to SHM so Wine can create
+        // gdi_hide_container_ as a child of it (not of screen->root).
+        // Must happen before sending Attached — Wine reads it in Editor ctor.
+        if (render_shm_)
+            render_shm_->set_native_render_xid(
+                static_cast<uint32_t>(render_window_));
     }
 
     const tresult result = bridge_.send_mutually_recursive_message(
@@ -202,7 +207,61 @@ tresult PLUGIN_API Vst3PlugViewProxyImpl::attached(void* parent,
         render_running_.store(true, std::memory_order_relaxed);
 
         render_thread_ = std::thread([this]() {
+            using namespace std::chrono_literals;
+            int health_counter = 0;
+
+            uint32_t diag_blitted = 0;
+            auto diag_last = std::chrono::steady_clock::now();
+            const uint32_t diag_parent = static_cast<uint32_t>(render_parent_xid_);
+            std::cerr << "[yabridge native " << diag_parent
+                      << "] render_window=" << render_window_ << "\n";
+
+            // Wait for Wine side to publish the container XID into SHM.
+            composite_xid_ = 0;
+            for (int wait = 0; wait < 100 && !composite_xid_; ++wait) {
+                composite_xid_ = static_cast<xcb_window_t>(
+                    render_shm_->container_xid());
+                if (!composite_xid_)
+                    std::this_thread::sleep_for(10ms);
+            }
+            if (!composite_xid_) {
+                std::cerr << "[yabridge native " << diag_parent
+                          << "] XComposite: container_xid not set, aborting\n";
+                return;
+            }
+
+            // Initialize XComposite: redirect container to off-screen pixmap.
+            // REDIRECT_MANUAL keeps the window invisible while DXVK/DRI3
+            // continues presenting normally into the pixmap.
+            {
+                auto* ver = xcb_composite_query_version_reply(
+                    render_x11_,
+                    xcb_composite_query_version(render_x11_, 0, 4), nullptr);
+                if (ver) free(ver);
+            }
+            xcb_composite_redirect_window(render_x11_, composite_xid_,
+                                          XCB_COMPOSITE_REDIRECT_MANUAL);
+            composite_pixmap_ = xcb_generate_id(render_x11_);
+            xcb_composite_name_window_pixmap(render_x11_, composite_xid_,
+                                              composite_pixmap_);
+            xcb_flush(render_x11_);
+            std::cerr << "[yabridge native " << diag_parent
+                      << "] XComposite redirect xid=" << composite_xid_
+                      << " pixmap=" << composite_pixmap_ << "\n";
+
+            uint32_t last_composite_w = 0, last_composite_h = 0;
+
             while (render_running_.load(std::memory_order_relaxed)) {
+                // Periodic native-side diagnostic (every ~5 s).
+                auto diag_now = std::chrono::steady_clock::now();
+                if (diag_now - diag_last >= std::chrono::seconds(5)) {
+                    std::cerr << "[yabridge native " << diag_parent
+                              << "] blitted=" << diag_blitted << "/5s"
+                              << " xcb_err=" << xcb_connection_has_error(render_x11_)
+                              << "\n";
+                    diag_blitted = 0;
+                    diag_last = diag_now;
+                }
                 // Poll XCB events. response_type==0 means a protocol error
                 // (e.g. BadDrawable after render_window_ is destroyed).
                 // xcb_connection_has_error() only catches fatal socket-level
@@ -263,31 +322,121 @@ tresult PLUGIN_API Vst3PlugViewProxyImpl::attached(void* parent,
                 }
 
                 if (need_reconnect) {
-                    render_reconnect();
+                    if (!render_running_.load(std::memory_order_relaxed))
+                        break;
+                    std::cerr << "[yabridge native " << diag_parent
+                              << "] XCB protocol error -> reconnect\n";
+                    bool ok = render_reconnect();
+                    std::cerr << "[yabridge native " << diag_parent
+                              << "] reconnect=" << ok << "\n";
+                    if (!ok)
+                        std::this_thread::sleep_for(1000ms);
+                    health_counter = 0;
                     continue;
                 }
 
+                // Periodic health check (~1 s at 8 ms/iter when idle).
+                // xcb_put_image silently succeeds on a window whose ancestor
+                // is unmapped (XCB_MAP_STATE_UNVIEWABLE) — no error events
+                // are generated, but nothing shows. Detect and reconnect.
+                if (++health_counter >= 120) {
+                    health_counter = 0;
+                    if (xcb_connection_has_error(render_x11_)) {
+                        std::cerr << "[yabridge native " << diag_parent
+                                  << "] health: xcb_conn_err -> reconnect\n";
+                        bool ok = render_reconnect();
+                        std::cerr << "[yabridge native " << diag_parent
+                                  << "] reconnect=" << ok << "\n";
+                        if (!ok)
+                            std::this_thread::sleep_for(1000ms);
+                        continue;
+                    }
+                    xcb_get_window_attributes_reply_t* attrs =
+                        xcb_get_window_attributes_reply(
+                            render_x11_,
+                            xcb_get_window_attributes(render_x11_,
+                                                      render_window_),
+                            nullptr);
+                    const bool viewable =
+                        attrs &&
+                        attrs->map_state == XCB_MAP_STATE_VIEWABLE;
+                    free(attrs);
+                    std::cerr << "[yabridge native " << diag_parent
+                              << "] health: viewable=" << viewable << "\n";
+                    if (!viewable) {
+                        bool ok = render_reconnect();
+                        std::cerr << "[yabridge native " << diag_parent
+                                  << "] reconnect=" << ok << "\n";
+                        if (!ok)
+                            std::this_thread::sleep_for(1000ms);
+                        continue;
+                    }
+
+                    // Check if render_window_ is the topmost sibling within
+                    // render_parent_xid_. A sibling created on top would
+                    // silently obscure our blits (xcb_put_image still succeeds,
+                    // viewable=1, but nothing shows on screen).
+                    xcb_query_tree_reply_t* ptree = xcb_query_tree_reply(
+                        render_x11_,
+                        xcb_query_tree(render_x11_, render_parent_xid_),
+                        nullptr);
+                    if (ptree) {
+                        const xcb_window_t* ch =
+                            xcb_query_tree_children(ptree);
+                        int n = xcb_query_tree_children_length(ptree);
+                        const bool at_top =
+                            (n > 0 && ch[n - 1] == render_window_);
+                        std::cerr << "[yabridge native " << diag_parent
+                                  << "] siblings=" << n
+                                  << " at_top=" << at_top << "\n";
+                        if (!at_top) {
+                            // Raise render_window_ above any sibling.
+                            const uint32_t above = XCB_STACK_MODE_ABOVE;
+                            xcb_configure_window(
+                                render_x11_, render_window_,
+                                XCB_CONFIG_WINDOW_STACK_MODE, &above);
+                            xcb_flush(render_x11_);
+                        }
+                        free(ptree);
+                    }
+                }
+
+                // Read w/h from SHM (pixel data not used — display comes
+                // from the XComposite backing pixmap instead).
                 uint32_t w = 0, h = 0, stride = 0;
                 const uint8_t* px = render_shm_->beginRead(w, h, stride);
                 if (px && w > 0 && h > 0) {
-                    // Resize child window to match frame dimensions.
-                    const uint32_t dims[2] = {w, h};
-                    xcb_configure_window(
-                        render_x11_, render_window_,
-                        XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
-                        dims);
-
-                    // Blit the BGRA frame into the X11 window.
-                    xcb_put_image(render_x11_, XCB_IMAGE_FORMAT_Z_PIXMAP,
-                                  render_window_, render_gc_,
-                                  static_cast<uint16_t>(w),
-                                  static_cast<uint16_t>(h),
-                                  0, 0, 0, render_depth_,
-                                  stride * h, px);
-                    xcb_flush(render_x11_);
                     render_shm_->endRead();
+
+                    if (!composite_pixmap_ ||
+                        w != last_composite_w || h != last_composite_h) {
+                        // Re-obtain pixmap on resize or after reconnect.
+                        if (composite_pixmap_) {
+                            xcb_free_pixmap(render_x11_, composite_pixmap_);
+                        }
+                        composite_pixmap_ = xcb_generate_id(render_x11_);
+                        xcb_composite_name_window_pixmap(
+                            render_x11_, composite_xid_, composite_pixmap_);
+                        const uint32_t dims[2] = {w, h};
+                        xcb_configure_window(
+                            render_x11_, render_window_,
+                            XCB_CONFIG_WINDOW_WIDTH |
+                                XCB_CONFIG_WINDOW_HEIGHT,
+                            dims);
+                        xcb_flush(render_x11_);
+                        last_composite_w = w;
+                        last_composite_h = h;
+                    }
+
+                    // Copy from XComposite backing pixmap to render_window_.
+                    xcb_copy_area(render_x11_, composite_pixmap_,
+                                  render_window_, render_gc_, 0, 0, 0, 0,
+                                  static_cast<uint16_t>(w),
+                                  static_cast<uint16_t>(h));
+                    xcb_flush(render_x11_);
+                    ++diag_blitted;
                 } else {
-                    using namespace std::chrono_literals;
+                    if (px) render_shm_->endRead();
                     std::this_thread::sleep_for(8ms);
                 }
             }
@@ -318,24 +467,42 @@ bool Vst3PlugViewProxyImpl::render_reconnect() noexcept {
 
     const xcb_screen_t* screen =
         xcb_setup_roots_iterator(xcb_get_setup(render_x11_)).data;
-
     render_window_ = xcb_generate_id(render_x11_);
-    xcb_create_window(render_x11_, XCB_COPY_FROM_PARENT, render_window_,
+    const uint32_t rw_vals[] = {render_event_mask_, screen->default_colormap};
+    xcb_create_window(render_x11_, screen->root_depth, render_window_,
                       render_parent_xid_, 0, 0, 1, 1, 0,
-                      XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT,
-                      XCB_CW_EVENT_MASK, &render_event_mask_);
+                      XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual,
+                      XCB_CW_EVENT_MASK | XCB_CW_COLORMAP, rw_vals);
     xcb_map_window(render_x11_, render_window_);
     xcb_flush(render_x11_);
+    render_depth_ = screen->root_depth;
 
+    // Verify window creation succeeded.
     xcb_get_geometry_reply_t* geom = xcb_get_geometry_reply(
         render_x11_, xcb_get_geometry(render_x11_, render_window_), nullptr);
-    render_depth_ = geom ? geom->depth : screen->root_depth;
-    if (geom) free(geom);
+    if (!geom) {
+        return false;
+    }
+    free(geom);
 
     render_gc_ = xcb_generate_id(render_x11_);
     xcb_create_gc(render_x11_, render_gc_, render_window_, 0, nullptr);
 
-    // If even the fresh connection is in error, the parent window is gone.
+    // Re-establish XComposite redirect on the new connection.
+    if (composite_xid_) {
+        {
+            auto* ver = xcb_composite_query_version_reply(
+                render_x11_,
+                xcb_composite_query_version(render_x11_, 0, 4), nullptr);
+            if (ver) free(ver);
+        }
+        xcb_composite_redirect_window(render_x11_, composite_xid_,
+                                      XCB_COMPOSITE_REDIRECT_MANUAL);
+        xcb_flush(render_x11_);
+        // Signal render loop to re-obtain the pixmap on next iteration.
+        composite_pixmap_ = 0;
+    }
+
     return !xcb_connection_has_error(render_x11_);
 }
 
@@ -344,6 +511,10 @@ void Vst3PlugViewProxyImpl::stop_render_thread() noexcept {
     if (render_thread_.joinable()) render_thread_.join();
 
     if (render_x11_) {
+        if (composite_pixmap_ != 0) {
+            xcb_free_pixmap(render_x11_, composite_pixmap_);
+            composite_pixmap_ = 0;
+        }
         if (render_gc_ != 0) {
             xcb_free_gc(render_x11_, render_gc_);
             render_gc_ = 0;
@@ -356,13 +527,22 @@ void Vst3PlugViewProxyImpl::stop_render_thread() noexcept {
         xcb_disconnect(render_x11_);
         render_x11_ = nullptr;
     }
+    composite_xid_ = 0;
     render_shm_.reset();
 }
 
 tresult PLUGIN_API Vst3PlugViewProxyImpl::removed() {
-    stop_render_thread();
-    return bridge_.send_mutually_recursive_message(
+    // Signal render thread to stop but don't join yet. The Wine-side Editor
+    // destructor must reparent wine_window_ and destroy gdi_hide_container_
+    // while render_window_ (its parent) is still alive.
+    render_running_.store(false, std::memory_order_relaxed);
+
+    const tresult result = bridge_.send_mutually_recursive_message(
         YaPlugView::Removed{.owner_instance_id = owner_instance_id()});
+
+    // Wine has now destroyed gdi_hide_container_. Safe to join and clean up.
+    stop_render_thread();
+    return result;
 }
 
 tresult PLUGIN_API Vst3PlugViewProxyImpl::onWheel(float distance) {
@@ -418,8 +598,13 @@ tresult PLUGIN_API Vst3PlugViewProxyImpl::onSize(Steinberg::ViewRect* newSize) {
 }
 
 tresult PLUGIN_API Vst3PlugViewProxyImpl::onFocus(TBool state) {
+    // In GDI capture mode the plugin renders into a hidden HWND. Some plugins
+    // pause their rendering loop on onFocus(false), which freezes the capture.
+    // Always report focus=true so rendering continues regardless of which DAW
+    // window the user is interacting with.
+    const TBool effective_state = render_shm_ ? TBool(1) : state;
     return bridge_.send_mutually_recursive_message(YaPlugView::OnFocus{
-        .owner_instance_id = owner_instance_id(), .state = state});
+        .owner_instance_id = owner_instance_id(), .state = effective_state});
 }
 
 tresult PLUGIN_API

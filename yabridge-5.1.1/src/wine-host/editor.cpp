@@ -425,8 +425,10 @@ Editor::Editor(MainContext& main_context,
         // DAW parent because the native render_window_ already handles display.
         // Using do_reparent (not SetWindowPos) avoids moving Wine's X11 window
         // to extreme negative coords where it stops rendering.
+        //
         const xcb_screen_t* const screen = xcb_setup_roots_iterator(
             xcb_get_setup(x11_connection_.get())).data;
+
         gdi_hide_container_ = xcb_generate_id(x11_connection_.get());
         const uint32_t container_vals[] = {
             screen->black_pixel,     // XCB_CW_BACK_PIXEL
@@ -435,24 +437,40 @@ Editor::Editor(MainContext& main_context,
         };
         xcb_create_window(x11_connection_.get(), XCB_COPY_FROM_PARENT,
                           gdi_hide_container_, screen->root,
-                          -10000, -10000, 4096, 4096,
+                          0, 0, 4096, 4096,
                           0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
                           screen->root_visual,
                           XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT |
                               XCB_CW_EVENT_MASK,
                           container_vals);
+        const uint32_t stack_below = XCB_STACK_MODE_BELOW;
+        xcb_configure_window(x11_connection_.get(), gdi_hide_container_,
+                             XCB_CONFIG_WINDOW_STACK_MODE, &stack_below);
         xcb_map_window(x11_connection_.get(), gdi_hide_container_);
         xcb_flush(x11_connection_.get());
         do_reparent(wine_window_, gdi_hide_container_);
 
         gdi_frame_shm_ = yabridge::FrameSharedMemory::open(frame_shm_name);
         if (gdi_frame_shm_ && gdi_frame_shm_->valid()) {
+            // Publish our container XID so the native render thread can
+            // call xcb_composite_redirect_window on it.
+            gdi_frame_shm_->set_container_xid(
+                static_cast<uint32_t>(gdi_hide_container_));
             gdi_capture_running_.store(true);
             gdi_capture_thread_ = Win32Thread([this]() {
                 // Track which child window received LBUTTONDOWN so that
                 // subsequent MOUSEMOVE and LBUTTONUP during a drag go to the
                 // same target even if the mouse leaves the control's rect.
                 HWND drag_target = nullptr;
+                int invalidate_counter = 0;
+                // Diagnostic: count frames written to SHM per 5-second window.
+                // fps drops to 0 during freeze → Wine-side plugin paused (Hyp A).
+                // fps stays ~60 during freeze → native display broken (Hyp B).
+                uint32_t diag_frames = 0;
+                int diag_ticks = 0;
+                uint64_t prev_fp = ~0ULL;
+                int stale_ticks = 0;
+                bool last_cap_ok = true;
 
                 while (gdi_capture_running_.load(std::memory_order_relaxed)) {
                     if (!gdi_capture_.width() || !gdi_capture_.height()) {
@@ -463,8 +481,53 @@ Editor::Editor(MainContext& main_context,
                     if (w > 0 && h > 0) {
                         if (uint8_t* buf = gdi_frame_shm_->beginWrite(
                                 (uint32_t)w, (uint32_t)h)) {
-                            gdi_capture_.capture(buf);
+                            const bool cap_ok =
+                                gdi_capture_.capture(buf);
+                            if (cap_ok != last_cap_ok) {
+                                std::cerr << "[yabridge gdi] capture "
+                                          << (cap_ok ? "OK" : "FAIL")
+                                          << "\n";
+                                last_cap_ok = cap_ok;
+                            }
+                            if (cap_ok) {
+                                // Fingerprint: sum of first 64 pixels'
+                                // red channel to detect stale frames.
+                                uint64_t fp = 0;
+                                const int n = std::min(w * h, 64);
+                                for (int i = 0; i < n; ++i)
+                                    fp += buf[i * 4];
+                                if (fp == prev_fp) {
+                                    if (++stale_ticks == 120) {
+                                        std::cerr
+                                            << "[yabridge gdi] STALE"
+                                            << " fp=" << fp << "\n";
+                                    }
+                                    // Every 2 s of stale: nudge the
+                                    // plugin's render loop back awake.
+                                    if (stale_ticks >= 120 &&
+                                        stale_ticks % 120 == 0) {
+                                        PostMessage(
+                                            win32_window_.handle_,
+                                            WM_ACTIVATEAPP, TRUE, 0);
+                                        PostMessage(
+                                            win32_window_.handle_,
+                                            WM_ACTIVATE,
+                                            MAKEWPARAM(WA_ACTIVE, 0),
+                                            0);
+                                        PostMessage(
+                                            win32_window_.handle_,
+                                            WM_SETFOCUS, 0, 0);
+                                    }
+                                } else {
+                                    if (stale_ticks >= 120)
+                                        std::cerr
+                                            << "[yabridge gdi] LIVE\n";
+                                    stale_ticks = 0;
+                                    prev_fp = fp;
+                                }
+                            }
                             gdi_frame_shm_->endWrite();
+                            ++diag_frames;
                         }
                     }
 
@@ -556,6 +619,22 @@ Editor::Editor(MainContext& main_context,
                         }
                     }
 
+                    // Periodically invalidate the window so plugins that
+                    // stop painting on focus loss keep producing frames.
+                    if (++invalidate_counter >= 30) {
+                        invalidate_counter = 0;
+                        InvalidateRect(win32_window_.handle_, nullptr, TRUE);
+                    }
+
+                    // Log capture rate every ~5 s so we can see whether the
+                    // plugin stopped producing frames during a freeze.
+                    if (++diag_ticks >= 300) {
+                        std::cerr << "[yabridge gdi] capture fps ~"
+                                  << (diag_frames / 5) << "\n";
+                        diag_frames = 0;
+                        diag_ticks = 0;
+                    }
+
                     Sleep(16);
                 }
             });
@@ -631,7 +710,8 @@ void Editor::resize(uint16_t width, uint16_t height) {
 }
 
 void Editor::show() noexcept {
-    ShowWindow(win32_window_.handle_, SW_SHOWNORMAL);
+    ShowWindow(win32_window_.handle_,
+               gdi_frame_shm_ ? SW_SHOWNOACTIVATE : SW_SHOWNORMAL);
     if (gdi_frame_shm_) {
         // Force all child windows to repaint immediately. On re-attach some
         // plugins don't re-render until they get WM_PAINT; without this the

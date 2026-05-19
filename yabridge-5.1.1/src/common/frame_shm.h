@@ -36,6 +36,13 @@ class FrameSharedMemory {
         std::atomic<uint32_t> read_idx;
         std::atomic<uint32_t> frame_count;
         Slot slots[kSlots];
+        // Wine side writes the X11 XID of gdi_hide_container_ here after
+        // creating the SHM so the native side can XComposite-redirect it.
+        std::atomic<uint32_t> gdi_container_xid{0};
+        // Native side writes render_window_ XID here before sending Attached
+        // so the Wine side can create gdi_hide_container_ as a child of it,
+        // isolating each plugin's container under its own Reaper FX panel.
+        std::atomic<uint32_t> native_render_xid{0};
 
         // SPSC ring for input events written by the native render thread and
         // read by the Wine capture thread.
@@ -74,6 +81,28 @@ class FrameSharedMemory {
     // Wine capture thread (consumer): dequeue one input event.
     // Returns false if the ring is empty.
     bool readInput(InputEvent& ev) noexcept;
+
+    // Wine side: publish container XID after SHM open so native can redirect.
+    void set_container_xid(uint32_t xid) noexcept {
+        if (ring_)
+            ring_->gdi_container_xid.store(xid, std::memory_order_release);
+    }
+    // Native side: read the container XID (0 = not yet set).
+    uint32_t container_xid() const noexcept {
+        return ring_ ? ring_->gdi_container_xid.load(std::memory_order_acquire)
+                     : 0;
+    }
+
+    // Native side: publish render_window_ XID before sending Attached.
+    void set_native_render_xid(uint32_t xid) noexcept {
+        if (ring_)
+            ring_->native_render_xid.store(xid, std::memory_order_release);
+    }
+    // Wine side: read render_window_ XID to use as parent for gdi_hide_container_.
+    uint32_t get_native_render_xid() const noexcept {
+        return ring_ ? ring_->native_render_xid.load(std::memory_order_acquire)
+                     : 0;
+    }
 
    private:
     FrameSharedMemory() = default;
