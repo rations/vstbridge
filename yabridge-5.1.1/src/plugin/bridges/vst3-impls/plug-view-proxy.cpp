@@ -18,7 +18,6 @@
 
 #include <chrono>
 #include <thread>
-#include <xcb/composite.h>
 #include <xcb/xcb.h>
 
 RunLoopTasks::RunLoopTasks(Steinberg::IPtr<Steinberg::IPlugFrame> plug_frame)
@@ -216,40 +215,10 @@ tresult PLUGIN_API Vst3PlugViewProxyImpl::attached(void* parent,
             std::cerr << "[yabridge native " << diag_parent
                       << "] render_window=" << render_window_ << "\n";
 
-            // Wait for Wine side to publish the container XID into SHM.
-            composite_xid_ = 0;
-            for (int wait = 0; wait < 100 && !composite_xid_; ++wait) {
-                composite_xid_ = static_cast<xcb_window_t>(
-                    render_shm_->container_xid());
-                if (!composite_xid_)
-                    std::this_thread::sleep_for(10ms);
-            }
-            if (!composite_xid_) {
-                std::cerr << "[yabridge native " << diag_parent
-                          << "] XComposite: container_xid not set, aborting\n";
-                return;
-            }
-
-            // Initialize XComposite: redirect container to off-screen pixmap.
-            // REDIRECT_MANUAL keeps the window invisible while DXVK/DRI3
-            // continues presenting normally into the pixmap.
-            {
-                auto* ver = xcb_composite_query_version_reply(
-                    render_x11_,
-                    xcb_composite_query_version(render_x11_, 0, 4), nullptr);
-                if (ver) free(ver);
-            }
-            xcb_composite_redirect_window(render_x11_, composite_xid_,
-                                          XCB_COMPOSITE_REDIRECT_MANUAL);
-            composite_pixmap_ = xcb_generate_id(render_x11_);
-            xcb_composite_name_window_pixmap(render_x11_, composite_xid_,
-                                              composite_pixmap_);
-            xcb_flush(render_x11_);
-            std::cerr << "[yabridge native " << diag_parent
-                      << "] XComposite redirect xid=" << composite_xid_
-                      << " pixmap=" << composite_pixmap_ << "\n";
-
-            uint32_t last_composite_w = 0, last_composite_h = 0;
+            // Wine side writes pixel data via XComposite+xcb_get_image into SHM.
+            // Native side just blits SHM pixels into render_window_ — no XComposite
+            // operations here, so two plugins' render threads cannot interfere.
+            uint32_t last_render_w = 0, last_render_h = 0;
 
             while (render_running_.load(std::memory_order_relaxed)) {
                 // Periodic native-side diagnostic (every ~5 s).
@@ -307,8 +276,13 @@ tresult PLUGIN_API Vst3PlugViewProxyImpl::attached(void* parent,
                             input_ev.type =
                                 (ev_type == XCB_BUTTON_PRESS) ? 6 : 7;
                         }
-                        if (input_ev.type != 0)
+                        if (input_ev.type != 0) {
+                            std::cerr << "[yabridge native " << diag_parent
+                                      << "] click type=" << (int)input_ev.type
+                                      << " x=" << input_ev.x
+                                      << " y=" << input_ev.y << "\n";
                             render_shm_->writeInput(input_ev);
+                        }
                     } else if (ev_type == XCB_MOTION_NOTIFY) {
                         const auto* mev =
                             reinterpret_cast<xcb_motion_notify_event_t*>(
@@ -401,22 +375,12 @@ tresult PLUGIN_API Vst3PlugViewProxyImpl::attached(void* parent,
                     }
                 }
 
-                // Read w/h from SHM (pixel data not used — display comes
-                // from the XComposite backing pixmap instead).
+                // Read pixel data from SHM (Wine side wrote it via xcb_get_image
+                // from its own XComposite redirect — no XComposite here).
                 uint32_t w = 0, h = 0, stride = 0;
                 const uint8_t* px = render_shm_->beginRead(w, h, stride);
                 if (px && w > 0 && h > 0) {
-                    render_shm_->endRead();
-
-                    if (!composite_pixmap_ ||
-                        w != last_composite_w || h != last_composite_h) {
-                        // Re-obtain pixmap on resize or after reconnect.
-                        if (composite_pixmap_) {
-                            xcb_free_pixmap(render_x11_, composite_pixmap_);
-                        }
-                        composite_pixmap_ = xcb_generate_id(render_x11_);
-                        xcb_composite_name_window_pixmap(
-                            render_x11_, composite_xid_, composite_pixmap_);
+                    if (w != last_render_w || h != last_render_h) {
                         const uint32_t dims[2] = {w, h};
                         xcb_configure_window(
                             render_x11_, render_window_,
@@ -424,15 +388,17 @@ tresult PLUGIN_API Vst3PlugViewProxyImpl::attached(void* parent,
                                 XCB_CONFIG_WINDOW_HEIGHT,
                             dims);
                         xcb_flush(render_x11_);
-                        last_composite_w = w;
-                        last_composite_h = h;
+                        last_render_w = w;
+                        last_render_h = h;
                     }
-
-                    // Copy from XComposite backing pixmap to render_window_.
-                    xcb_copy_area(render_x11_, composite_pixmap_,
-                                  render_window_, render_gc_, 0, 0, 0, 0,
+                    // Blit SHM pixel data (BGRA/ZPixmap) into render_window_.
+                    xcb_put_image(render_x11_, XCB_IMAGE_FORMAT_Z_PIXMAP,
+                                  render_window_, render_gc_,
                                   static_cast<uint16_t>(w),
-                                  static_cast<uint16_t>(h));
+                                  static_cast<uint16_t>(h),
+                                  0, 0, 0, render_depth_,
+                                  w * h * 4, px);
+                    render_shm_->endRead();
                     xcb_flush(render_x11_);
                     ++diag_blitted;
                 } else {
@@ -488,21 +454,6 @@ bool Vst3PlugViewProxyImpl::render_reconnect() noexcept {
     render_gc_ = xcb_generate_id(render_x11_);
     xcb_create_gc(render_x11_, render_gc_, render_window_, 0, nullptr);
 
-    // Re-establish XComposite redirect on the new connection.
-    if (composite_xid_) {
-        {
-            auto* ver = xcb_composite_query_version_reply(
-                render_x11_,
-                xcb_composite_query_version(render_x11_, 0, 4), nullptr);
-            if (ver) free(ver);
-        }
-        xcb_composite_redirect_window(render_x11_, composite_xid_,
-                                      XCB_COMPOSITE_REDIRECT_MANUAL);
-        xcb_flush(render_x11_);
-        // Signal render loop to re-obtain the pixmap on next iteration.
-        composite_pixmap_ = 0;
-    }
-
     return !xcb_connection_has_error(render_x11_);
 }
 
@@ -511,10 +462,6 @@ void Vst3PlugViewProxyImpl::stop_render_thread() noexcept {
     if (render_thread_.joinable()) render_thread_.join();
 
     if (render_x11_) {
-        if (composite_pixmap_ != 0) {
-            xcb_free_pixmap(render_x11_, composite_pixmap_);
-            composite_pixmap_ = 0;
-        }
         if (render_gc_ != 0) {
             xcb_free_gc(render_x11_, render_gc_);
             render_gc_ = 0;
@@ -527,7 +474,6 @@ void Vst3PlugViewProxyImpl::stop_render_thread() noexcept {
         xcb_disconnect(render_x11_);
         render_x11_ = nullptr;
     }
-    composite_xid_ = 0;
     render_shm_.reset();
 }
 

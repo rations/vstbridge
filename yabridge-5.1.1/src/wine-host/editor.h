@@ -25,7 +25,6 @@
 #include <function2/function2.hpp>
 
 #include "../common/frame_shm.h"
-#include "gdi_capture.h"
 
 // Use the native version of xcb
 #pragma push_macro("_WIN32")
@@ -497,7 +496,6 @@ class Editor {
     // GDI capture state — non-empty only when frame_shm_name was passed.
     xcb_window_t gdi_hide_container_ = XCB_WINDOW_NONE;
     std::unique_ptr<yabridge::FrameSharedMemory> gdi_frame_shm_;
-    yabridge::GdiCapture gdi_capture_;
     std::atomic<bool> gdi_capture_running_{false};
     Win32Thread gdi_capture_thread_;
 };

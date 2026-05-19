@@ -16,6 +16,11 @@
 
 #include "editor.h"
 
+#pragma push_macro("_WIN32")
+#undef _WIN32
+#include <xcb/composite.h>
+#pragma pop_macro("_WIN32")
+
 #include <iostream>
 #include <sstream>
 
@@ -450,84 +455,134 @@ Editor::Editor(MainContext& main_context,
         xcb_flush(x11_connection_.get());
         do_reparent(wine_window_, gdi_hide_container_);
 
+        // Set up XComposite redirect on this Wine process's own x11_connection_
+        // so DXVK/DRI3 presents to an off-screen pixmap the capture thread can
+        // read. Each plugin manages its own redirect on its own XCB connection,
+        // so Plugin 2's redirect cannot interfere with Plugin 1's pixmap.
+        {
+            auto* ver = xcb_composite_query_version_reply(
+                x11_connection_.get(),
+                xcb_composite_query_version(x11_connection_.get(), 0, 4),
+                nullptr);
+            if (ver) free(ver);
+        }
+        xcb_composite_redirect_window(x11_connection_.get(), gdi_hide_container_,
+                                       XCB_COMPOSITE_REDIRECT_MANUAL);
+        xcb_flush(x11_connection_.get());
+
         gdi_frame_shm_ = yabridge::FrameSharedMemory::open(frame_shm_name);
         if (gdi_frame_shm_ && gdi_frame_shm_->valid()) {
-            // Publish our container XID so the native render thread can
-            // call xcb_composite_redirect_window on it.
-            gdi_frame_shm_->set_container_xid(
-                static_cast<uint32_t>(gdi_hide_container_));
             gdi_capture_running_.store(true);
             gdi_capture_thread_ = Win32Thread([this]() {
+                xcb_connection_t* cap_conn = xcb_connect(nullptr, nullptr);
+                if (!cap_conn || xcb_connection_has_error(cap_conn)) {
+                    if (cap_conn) xcb_disconnect(cap_conn);
+                    return;
+                }
+                {
+                    auto* ver = xcb_composite_query_version_reply(
+                        cap_conn,
+                        xcb_composite_query_version(cap_conn, 0, 4),
+                        nullptr);
+                    if (ver) free(ver);
+                }
+                xcb_pixmap_t cap_pixmap = XCB_NONE;
+                uint32_t cap_w = 0, cap_h = 0;
                 // Track which child window received LBUTTONDOWN so that
                 // subsequent MOUSEMOVE and LBUTTONUP during a drag go to the
                 // same target even if the mouse leaves the control's rect.
                 HWND drag_target = nullptr;
-                int invalidate_counter = 0;
-                // Diagnostic: count frames written to SHM per 5-second window.
-                // fps drops to 0 during freeze → Wine-side plugin paused (Hyp A).
-                // fps stays ~60 during freeze → native display broken (Hyp B).
                 uint32_t diag_frames = 0;
                 int diag_ticks = 0;
                 uint64_t prev_fp = ~0ULL;
                 int stale_ticks = 0;
-                bool last_cap_ok = true;
 
                 while (gdi_capture_running_.load(std::memory_order_relaxed)) {
-                    if (!gdi_capture_.width() || !gdi_capture_.height()) {
-                        gdi_capture_.initialize(win32_window_.handle_);
-                    }
-                    const int w = gdi_capture_.width();
-                    const int h = gdi_capture_.height();
+                    RECT client_rect{};
+                    GetClientRect(win32_window_.handle_, &client_rect);
+                    const uint32_t w =
+                        static_cast<uint32_t>(client_rect.right);
+                    const uint32_t h =
+                        static_cast<uint32_t>(client_rect.bottom);
+
                     if (w > 0 && h > 0) {
-                        if (uint8_t* buf = gdi_frame_shm_->beginWrite(
-                                (uint32_t)w, (uint32_t)h)) {
-                            const bool cap_ok =
-                                gdi_capture_.capture(buf);
-                            if (cap_ok != last_cap_ok) {
-                                std::cerr << "[yabridge gdi] capture "
-                                          << (cap_ok ? "OK" : "FAIL")
-                                          << "\n";
-                                last_cap_ok = cap_ok;
+                        if (w != cap_w || h != cap_h ||
+                            cap_pixmap == XCB_NONE) {
+                            if (cap_pixmap != XCB_NONE) {
+                                xcb_free_pixmap(cap_conn, cap_pixmap);
+                                cap_pixmap = XCB_NONE;
                             }
-                            if (cap_ok) {
-                                // Fingerprint: sum of first 64 pixels'
-                                // red channel to detect stale frames.
+                            cap_pixmap = xcb_generate_id(cap_conn);
+                            xcb_composite_name_window_pixmap(
+                                cap_conn, gdi_hide_container_, cap_pixmap);
+                            xcb_flush(cap_conn);
+                            cap_w = w;
+                            cap_h = h;
+                        }
+
+                        if (uint8_t* buf = gdi_frame_shm_->beginWrite(w, h)) {
+                            xcb_generic_error_t* gi_err = nullptr;
+                            xcb_get_image_reply_t* gi =
+                                xcb_get_image_reply(
+                                    cap_conn,
+                                    xcb_get_image(
+                                        cap_conn,
+                                        XCB_IMAGE_FORMAT_Z_PIXMAP,
+                                        cap_pixmap, 0, 0,
+                                        static_cast<uint16_t>(w),
+                                        static_cast<uint16_t>(h), ~0u),
+                                    &gi_err);
+                            bool wrote = false;
+                            if (gi_err) {
+                                free(gi_err);
+                                if (cap_pixmap != XCB_NONE) {
+                                    xcb_free_pixmap(cap_conn, cap_pixmap);
+                                    cap_pixmap = XCB_NONE;
+                                }
+                            } else if (gi) {
+                                const uint8_t* data =
+                                    xcb_get_image_data(gi);
+                                const int data_len =
+                                    xcb_get_image_data_length(gi);
+                                const size_t expected =
+                                    static_cast<size_t>(w) * h * 4;
+                                if (static_cast<size_t>(data_len) >=
+                                    expected) {
+                                    memcpy(buf, data, expected);
+                                    wrote = true;
+                                }
+                                free(gi);
+                            }
+                            if (wrote) {
                                 uint64_t fp = 0;
-                                const int n = std::min(w * h, 64);
+                                const int n = std::min<int>(w * h, 64);
                                 for (int i = 0; i < n; ++i)
                                     fp += buf[i * 4];
                                 if (fp == prev_fp) {
-                                    if (++stale_ticks == 120) {
+                                    if (++stale_ticks == 120)
                                         std::cerr
                                             << "[yabridge gdi] STALE"
                                             << " fp=" << fp << "\n";
-                                    }
-                                    // Every 2 s of stale: nudge the
-                                    // plugin's render loop back awake.
                                     if (stale_ticks >= 120 &&
                                         stale_ticks % 120 == 0) {
-                                        PostMessage(
-                                            win32_window_.handle_,
-                                            WM_ACTIVATEAPP, TRUE, 0);
-                                        PostMessage(
-                                            win32_window_.handle_,
-                                            WM_ACTIVATE,
-                                            MAKEWPARAM(WA_ACTIVE, 0),
-                                            0);
-                                        PostMessage(
-                                            win32_window_.handle_,
-                                            WM_SETFOCUS, 0, 0);
+                                        PostMessage(win32_window_.handle_,
+                                                    WM_ACTIVATEAPP, TRUE, 0);
+                                        PostMessage(win32_window_.handle_,
+                                                    WM_ACTIVATE,
+                                                    MAKEWPARAM(WA_ACTIVE, 0),
+                                                    0);
+                                        PostMessage(win32_window_.handle_,
+                                                    WM_SETFOCUS, 0, 0);
                                     }
                                 } else {
                                     if (stale_ticks >= 120)
-                                        std::cerr
-                                            << "[yabridge gdi] LIVE\n";
+                                        std::cerr << "[yabridge gdi] LIVE\n";
                                     stale_ticks = 0;
                                     prev_fp = fp;
                                 }
+                                ++diag_frames;
                             }
                             gdi_frame_shm_->endWrite();
-                            ++diag_frames;
                         }
                     }
 
@@ -535,6 +590,12 @@ Editor::Editor(MainContext& main_context,
                     // into the plugin's Win32 window hierarchy.
                     yabridge::FrameSharedMemory::InputEvent input_ev{};
                     while (gdi_frame_shm_->readInput(input_ev)) {
+                        if (input_ev.type == 2 || input_ev.type == 3) {
+                            std::cerr << "[yabridge gdi] click type="
+                                      << (int)input_ev.type
+                                      << " x=" << input_ev.x
+                                      << " y=" << input_ev.y << "\n";
+                        }
                         // Event coords are in win32_window_ client space.
                         POINT pt{input_ev.x, input_ev.y};
 
@@ -584,8 +645,15 @@ Editor::Editor(MainContext& main_context,
                                 break;
                             case 2:
                                 drag_target = target;
-                                PostMessage(target, WM_LBUTTONDOWN, MK_LBUTTON,
-                                            client_coords);
+                                {
+                                    const BOOL ok = PostMessage(
+                                        target, WM_LBUTTONDOWN, MK_LBUTTON,
+                                        client_coords);
+                                    std::cerr
+                                        << "[yabridge gdi] PostMessage"
+                                        << " WM_LBUTTONDOWN ok=" << ok
+                                        << " target=" << target << "\n";
+                                }
                                 break;
                             case 3:
                                 PostMessage(target, WM_LBUTTONUP, 0,
@@ -619,13 +687,6 @@ Editor::Editor(MainContext& main_context,
                         }
                     }
 
-                    // Periodically invalidate the window so plugins that
-                    // stop painting on focus loss keep producing frames.
-                    if (++invalidate_counter >= 30) {
-                        invalidate_counter = 0;
-                        InvalidateRect(win32_window_.handle_, nullptr, TRUE);
-                    }
-
                     // Log capture rate every ~5 s so we can see whether the
                     // plugin stopped producing frames during a freeze.
                     if (++diag_ticks >= 300) {
@@ -637,6 +698,10 @@ Editor::Editor(MainContext& main_context,
 
                     Sleep(16);
                 }
+
+                if (cap_pixmap != XCB_NONE)
+                    xcb_free_pixmap(cap_conn, cap_pixmap);
+                xcb_disconnect(cap_conn);
             });
         }
     } else if (use_xembed_) {
