@@ -596,6 +596,7 @@ void Editor::handle_x11_events() noexcept {
                         event->window == parent_window_) {
                         if (use_xembed_) {
                             do_xembed();
+                            fix_local_coordinates();
                         }
                     }
                 } break;
@@ -783,10 +784,6 @@ HWND Editor::win32_handle() const noexcept {
 }
 
 void Editor::fix_local_coordinates() const {
-    if (use_xembed_) {
-        return;
-    }
-
     // We're purposely not using XEmbed here. This has the consequence that wine
     // still thinks that any X and Y coordinates are relative to the x11 window
     // root instead of the parent window provided by the DAW, causing all sorts
@@ -817,6 +814,27 @@ void Editor::fix_local_coordinates() const {
             x11_connection_.get(), translate_cookie, &error));
     THROW_X11_ERROR(error);
 
+    const int abs_x = translated_coordinates->dst_x;
+    const int abs_y = translated_coordinates->dst_y;
+
+    logger_.log_editor_trace([&]() {
+        return "DEBUG: Spoofing local coordinates to (" +
+               std::to_string(abs_x) + ", " +
+               std::to_string(abs_y) + ")";
+    });
+
+    if (use_xembed_) {
+        // In XEmbed mode, Wine's wm_state_serial mechanism blocks the usual
+        // ConfigureNotify path from propagating to the Win32 HWND rect. Call
+        // SetWindowPos directly so Wine's screen_to_client() translates click
+        // coordinates correctly. The embedded-window guard in window_set_config
+        // ensures Wine won't actually move the X11 window.
+        SetWindowPos(win32_window_.handle_, nullptr, abs_x, abs_y, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW |
+                         SWP_NOSENDCHANGING);
+        return;
+    }
+
     xcb_configure_notify_event_t translated_event{};
     translated_event.response_type = XCB_CONFIGURE_NOTIFY;
     translated_event.event = wine_window_;
@@ -827,14 +845,8 @@ void Editor::fix_local_coordinates() const {
     // this certain plugins (such as those by Valhalla DSP) would break.
     translated_event.width = client_area_.width;
     translated_event.height = client_area_.height;
-    translated_event.x = translated_coordinates->dst_x;
-    translated_event.y = translated_coordinates->dst_y;
-
-    logger_.log_editor_trace([&]() {
-        return "DEBUG: Spoofing local coordinates to (" +
-               std::to_string(translated_event.x) + ", " +
-               std::to_string(translated_event.y) + ")";
-    });
+    translated_event.x = abs_x;
+    translated_event.y = abs_y;
 
     xcb_send_event(
         x11_connection_.get(), false, wine_window_,
@@ -1169,11 +1181,17 @@ void Editor::do_xembed() const {
     // If we're embedding using XEmbed, then we'll have to go through the whole
     // XEmbed dance here. See the spec for more information on how this works:
     // https://specifications.freedesktop.org/xembed-spec/xembed-spec-latest.html#lifecycle
-    do_reparent(wine_window_, wrapper_window_.window_);
 
-    // Let the Wine window know it's being embedded into the parent window
+    // EMBEDDED_NOTIFY must arrive before ReparentNotify: Wine's
+    // X11DRV_ReparentNotify silently ignores the reparent if embedded==false.
+    // X events are FIFO so flushing here guarantees Wine sees the ClientMessage
+    // before the ReparentNotify that do_reparent() generates.
     send_xembed_message(wine_window_, xembed_embedded_notify_msg, 0,
                         wrapper_window_.window_, xembed_protocol_version);
+    xcb_flush(x11_connection_.get());
+
+    do_reparent(wine_window_, wrapper_window_.window_);
+
     send_xembed_message(wine_window_, xembed_focus_in_msg, xembed_focus_first,
                         0, 0);
     send_xembed_message(wine_window_, xembed_window_activate_msg, 0, 0, 0);
