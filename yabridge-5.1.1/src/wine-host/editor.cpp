@@ -561,22 +561,20 @@ void Editor::handle_x11_events() noexcept {
                     if (event->window == host_window_ ||
                         event->window == parent_window_ ||
                         event->window == wrapper_window_.window_) {
-                        if (!use_xembed_) {
-                            // NOTE: See the docstring on this field. This
-                            //       avoids flickering with some window manager
-                            //       and plugin combinations when dragging
-                            //       plugin windows around.
-                            if (is_mouse_button_held()) {
-                                logger_.log_editor_trace([&]() {
-                                    return "DEBUG: ConfigureNotify received "
-                                           "while mouse button is held down, "
-                                           "spooling the coordinate fix";
-                                });
+                        // NOTE: See the docstring on this field. This
+                        //       avoids flickering with some window manager
+                        //       and plugin combinations when dragging
+                        //       plugin windows around.
+                        if (is_mouse_button_held()) {
+                            logger_.log_editor_trace([&]() {
+                                return "DEBUG: ConfigureNotify received "
+                                       "while mouse button is held down, "
+                                       "spooling the coordinate fix";
+                            });
 
-                                should_fix_local_coordinates_ = true;
-                            } else {
-                                fix_local_coordinates();
-                            }
+                            should_fix_local_coordinates_ = true;
+                        } else {
+                            fix_local_coordinates();
                         }
                     }
                 } break;
@@ -595,8 +593,11 @@ void Editor::handle_x11_events() noexcept {
                     if (event->window == host_window_ ||
                         event->window == parent_window_) {
                         if (use_xembed_) {
-                            do_xembed();
-                            fix_local_coordinates();
+                            if (!xembed_done_) {
+                                do_xembed();
+                                xembed_done_ = true;
+                                fix_local_coordinates();
+                            }
                         }
                     }
                 } break;
@@ -1184,12 +1185,12 @@ void Editor::do_xembed() const {
 
     do_reparent(wine_window_, wrapper_window_.window_);
 
+    // EMBEDDED_NOTIFY sets data->embedded = true in Wine so mouse coordinate
+    // translation works. FOCUS_IN and WINDOW_ACTIVATE are omitted: they trigger
+    // WM_SETFOCUS/WM_ACTIVATE in the plugin which causes old VST2 plugins to
+    // redraw focus decorations and create visual glitches.
     send_xembed_message(wine_window_, xembed_embedded_notify_msg, 0,
                         wrapper_window_.window_, xembed_protocol_version);
-
-    send_xembed_message(wine_window_, xembed_focus_in_msg, xembed_focus_first,
-                        0, 0);
-    send_xembed_message(wine_window_, xembed_window_activate_msg, 0, 0, 0);
     xcb_flush(x11_connection_.get());
 
     xcb_map_window(x11_connection_.get(), wine_window_);

@@ -472,6 +472,14 @@ class Editor {
     bool should_fix_local_coordinates_ = false;
 
     /**
+     * Set to true after do_xembed() has run successfully from a VisibilityNotify
+     * event. Prevents re-sending XEMBED_FOCUS_IN/WINDOW_ACTIVATE on every
+     * subsequent visibility change, which causes visual glitches in plugins.
+     */
+    bool xembed_done_ = false;
+
+
+    /**
      * The atom corresponding to `_NET_ACTIVE_WINDOW`.
      */
     xcb_atom_t active_window_property_;
