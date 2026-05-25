@@ -174,6 +174,37 @@ cd tools/vstbridgectl
 
 # Fetch dependencies and build both CLI and GUI
 make
+
+# Install to ~/.local/bin (user install)
+./install.sh
+
+# Install to /usr/local/bin (system install)
+./install.sh --system
+```
+
+---
+
+## Installation
+
+After building, copy the build outputs to vstbridge's data directory and run a sync:
+
+```bash
+mkdir -p ~/.local/share/vstbridge
+cp build/libvstbridge-{vst2,vst3,clap}.so \
+   build/libvstbridge-chainloader-{vst2,vst3,clap}.so \
+   build/vstbridge-host.exe \
+   build/vstbridge-host.exe.so \
+   ~/.local/share/vstbridge/
+
+# Then use vstbridgectl to add your plugin directories and sync
+vstbridgectl add ~/.wine/drive_c/Program\ Files/VstPlugins
+vstbridgectl sync
+```
+
+Or use the GUI:
+
+```bash
+vstbridgectl-gtk
 ```
 
 ---
