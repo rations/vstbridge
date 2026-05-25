@@ -6,10 +6,7 @@ once.
 
 ## Usage
 
-Yabridgectl can be downloaded from the [releases
-page](https://github.com/robbert-vdh/yabridge/releases) on GitHub and can run
-from anywhere. All of the information below can also be found through
-`yabridgectl --help`.
+All of the information below can also be found through `yabridgectl --help`.
 
 Keep in mind that during normal usage you should not need to do anything other
 than the things listed in yabridge's [main
@@ -32,9 +29,9 @@ yabridgectl set --path=<path/to/directory/containing/yabridge/files>
 
 Yabridgectl can manage multiple Windows plugin install locations for you.
 Whenever you run `yabridgectl sync` it will search these directories for VST2
-plugins and VST3 modules. To add, remove and list directories, you can use the
-commands below. The status command will show you yabridgectl's current settings
-and the installation status for all of your plugins.
+plugins, VST3 modules, and CLAP plugins. To add, remove and list directories,
+you can use the commands below. The status command will show you yabridgectl's
+current settings and the installation status for all of your plugins.
 
 ```shell
 # Add a directory containing plugins
@@ -76,9 +73,18 @@ yabridgectl sync --force
 
 ## Building from source
 
-After installing [Rust](https://rustup.rs/), simply run the command below to
-compile and run:
+Requirements: `g++` with C++20 support, `git`, GNU Make.
+
+The build system fetches its header-only dependencies (CLI11, nlohmann/json,
+toml++) automatically on first build.
 
 ```shell
-cargo run --release
+cd tools/yabridgectl
+make
+```
+
+The compiled binary will be at `build/yabridgectl`. To install it:
+
+```shell
+make install PREFIX=~/.local
 ```
