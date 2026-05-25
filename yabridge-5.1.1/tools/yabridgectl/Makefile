@@ -36,9 +36,25 @@ OBJS := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 TARGET := $(BUILD_DIR)/yabridgectl
 
+GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0 2>/dev/null)
+GTK_LIBS   := $(shell pkg-config --libs   gtk+-3.0 2>/dev/null)
+
+GUI_OBJS := \
+	$(BUILD_DIR)/gui_main.o \
+	$(BUILD_DIR)/gui/app_window.o \
+	$(BUILD_DIR)/config.o \
+	$(BUILD_DIR)/files.o \
+	$(BUILD_DIR)/util.o \
+	$(BUILD_DIR)/symbols.o \
+	$(BUILD_DIR)/vst3_moduleinfo.o \
+	$(BUILD_DIR)/actions.o \
+	$(BUILD_DIR)/actions/blacklist.o
+
+GUI_TARGET := $(BUILD_DIR)/yabridgectl-gtk
+
 .PHONY: all deps clean install
 
-all: deps $(TARGET)
+all: deps $(TARGET) $(GUI_TARGET)
 
 # ─── Dependency fetch ─────────────────────────────────────────────────────────
 
@@ -70,10 +86,25 @@ $(BUILD_DIR):
 $(BUILD_DIR)/actions:
 	mkdir -p $@
 
+$(BUILD_DIR)/gui:
+	mkdir -p $@
+
+# ─── GUI-specific build rules (need GTK_CFLAGS) ───────────────────────────────
+
+$(BUILD_DIR)/gui_main.o: src/gui_main.cpp | $(BUILD_DIR) deps
+	$(CXX) $(CXXFLAGS) $(GTK_CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(BUILD_DIR)/gui/app_window.o: src/gui/app_window.cpp | $(BUILD_DIR)/gui deps
+	$(CXX) $(CXXFLAGS) $(GTK_CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(GUI_TARGET): $(GUI_OBJS)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(GTK_LIBS)
+
 # ─── Install / clean ──────────────────────────────────────────────────────────
 
-install: $(TARGET)
+install: $(TARGET) $(GUI_TARGET)
 	install -Dm755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/yabridgectl
+	install -Dm755 $(GUI_TARGET) $(DESTDIR)$(PREFIX)/bin/yabridgectl-gtk
 
 clean:
 	rm -rf $(BUILD_DIR)
