@@ -80,7 +80,7 @@ Click **Sync** to create the bridge `.so` files for every plugin found in your d
 - **Verbose** — show detailed output for every plugin processed
 - **No verify** — skip the Wine/vstbridge compatibility check (useful if the check gives a false warning)
 
-Run a sync whenever you install or remove Windows plugins.
+Run a sync whenever you install or remove Windows plugins. If the output says "found N leftover files", tick **Prune** and sync again to remove old bridge files that no longer correspond to any plugin.
 
 ### Status tab
 
@@ -90,9 +90,21 @@ Shows the currently installed vstbridge version, the detected Wine version, and 
 
 The vstbridge path is pre-configured to `~/.local/share/vstbridge` by the installer and does not need to be changed. You would only use this tab if you have moved the bridge files to a different location.
 
-VST2 plugins are installed in centralized mode — vstbridgectl creates `~/.vst/vstbridge/` and mirrors your plugin directory structure inside it, placing the bridge `.so` alongside a copy of the Windows `.dll`. For example, a plugin at `~/.wine/drive_c/Program Files/VstPlugins/Toontrack/Superior Drummer.dll` becomes `~/.vst/vstbridge/Toontrack/Superior Drummer.so`. Point your DAW's VST2 scan path at `~/.vst/vstbridge/`.
+VST2 plugins are installed in centralized mode — vstbridgectl creates `~/.vst/vstbridge/` and mirrors your plugin directory structure inside it, placing the bridge `.so` alongside a copy of the Windows `.dll`. For example, a plugin at `~/.wine/drive_c/Program Files/VstPlugins/Toontrack/Superior Drummer.dll` becomes `~/.vst/vstbridge/Toontrack/Superior Drummer.so`.
 
-If you are migrating from yabridge, update your DAW's VST2 scan path from `~/.vst/yabridge/` to `~/.vst/vstbridge/` after syncing.
+### Configuring your DAW
+
+After syncing, point your DAW at the vstbridge output directories so it can find the bridge plugins:
+
+| Plugin format | DAW scan path |
+|---------------|--------------|
+| VST2 | `~/.vst/vstbridge/` |
+| VST3 | `~/.vst3/vstbridge/` |
+| CLAP | `~/.clap/vstbridge/` |
+
+Add whichever paths apply to your plugin formats, then do a full plugin rescan in your DAW.
+
+If you are migrating from yabridge, update your DAW's scan paths from `~/.vst/yabridge/`, `~/.vst3/yabridge/`, and `~/.clap/yabridge/` to the vstbridge equivalents above.
 
 ---
 

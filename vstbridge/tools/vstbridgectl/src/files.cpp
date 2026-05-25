@@ -361,16 +361,16 @@ SearchResults SearchIndex::search() const {
 
                 std::optional<fs::path> effective_subdir = subdir;
                 if (in_bundle) {
-                    // Adjust subdirectory: strip x86_64-win / Contents / bundle_name from subdir
+                    // Adjust subdirectory: strip arch-win / Contents / bundle.vst3 from subdir.
+                    // Unconditional parent_path() calls are required here: has_parent_path()
+                    // returns false for a single-component relative path like "Bundle.vst3",
+                    // which would leave it set instead of stripping to empty/nullopt.
                     if (effective_subdir) {
                         auto p = *effective_subdir;
-                        // p = bundlename.vst3/Contents/x86_64-win  (relative to plugin dir)
-                        if (p.has_parent_path())
-                            p = p.parent_path();  // bundlename.vst3/Contents
-                        if (p.has_parent_path())
-                            p = p.parent_path();  // bundlename.vst3
-                        if (p.has_parent_path())
-                            p = p.parent_path();  // subdir before bundle
+                        // p = Bundle.vst3/Contents/x86_64-win (relative to scan dir)
+                        p = p.parent_path();  // Bundle.vst3/Contents
+                        p = p.parent_path();  // Bundle.vst3
+                        p = p.parent_path();  // "" when bundle is at scan root
                         effective_subdir = (p.empty() || p.string() == ".") ? std::nullopt
                                                                              : std::make_optional(p);
                     }
