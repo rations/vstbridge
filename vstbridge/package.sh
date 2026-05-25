@@ -84,6 +84,7 @@ cp "$TOOL_BUILD_DIR/vstbridgectl-gtk" "$STAGING/"
 # Desktop entry, installer, and docs
 cp "$SCRIPT_DIR/tools/vstbridgectl/vstbridgectl-gtk.desktop" "$STAGING/"
 cp "$SCRIPT_DIR/install.sh"    "$STAGING/"
+cp "$SCRIPT_DIR/uninstall.sh"  "$STAGING/"
 cp "$REPO_DIR/README.md"      "$STAGING/"
 cp "$SCRIPT_DIR/CHANGELOG.md" "$STAGING/"
 

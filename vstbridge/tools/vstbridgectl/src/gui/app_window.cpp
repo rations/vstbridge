@@ -248,16 +248,8 @@ void AppWindow::refresh_bl_list() {
 void AppWindow::refresh_settings() {
     gtk_entry_set_text(GTK_ENTRY(settings_path_entry),
                        config.vstbridge_home ? config.vstbridge_home->c_str() : "");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(settings_vst2_combo),
-                             config.vst2_location == Vst2InstallationLocation::Inline ? 1 : 0);
-    gtk_switch_set_active(GTK_SWITCH(settings_noverify_sw), config.no_verify);
-
-    // Update install location labels
-    if (config.vst2_location == Vst2InstallationLocation::Inline)
-        gtk_label_set_text(GTK_LABEL(settings_vst2_loc_lbl), "inline (next to each .dll)");
-    else
-        gtk_label_set_text(GTK_LABEL(settings_vst2_loc_lbl),
-                           pretty_path(vstbridge_vst2_home()).c_str());
+    gtk_label_set_text(GTK_LABEL(settings_vst2_loc_lbl),
+                       pretty_path(vstbridge_vst2_home()).c_str());
 
     gtk_label_set_text(GTK_LABEL(settings_vst3_loc_lbl),
                        pretty_path(vstbridge_vst3_home()).c_str());
@@ -274,6 +266,7 @@ static void on_dir_add(GtkButton*, gpointer data) {
         GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
         "_Cancel", GTK_RESPONSE_CANCEL,
         "_Add", GTK_RESPONSE_ACCEPT, nullptr);
+    gtk_file_chooser_set_show_hidden(GTK_FILE_CHOOSER(dlg), TRUE);
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
         char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
         try {
@@ -330,6 +323,7 @@ static void on_settings_browse(GtkButton*, gpointer data) {
         GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
         "_Cancel", GTK_RESPONSE_CANCEL,
         "_Select", GTK_RESPONSE_ACCEPT, nullptr);
+    gtk_file_chooser_set_show_hidden(GTK_FILE_CHOOSER(dlg), TRUE);
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
         char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
         gtk_entry_set_text(GTK_ENTRY(win->settings_path_entry), path);
@@ -357,9 +351,7 @@ static void on_settings_apply(GtkButton*, gpointer data) {
     const char* txt = gtk_entry_get_text(GTK_ENTRY(win->settings_path_entry));
     if (txt && *txt)
         opts.path = fs::path(txt);
-    int idx = gtk_combo_box_get_active(GTK_COMBO_BOX(win->settings_vst2_combo));
-    opts.vst2_location = (idx == 1) ? Vst2Location::Inline : Vst2Location::Centralized;
-    opts.no_verify     = gtk_switch_get_active(GTK_SWITCH(win->settings_noverify_sw));
+    opts.vst2_location = Vst2Location::Centralized;
     try {
         set_settings(win->config, opts);
         win->config = Config::read();
@@ -376,6 +368,7 @@ static void on_bl_add(GtkButton*, gpointer data) {
         GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
         "_Cancel", GTK_RESPONSE_CANCEL,
         "_Add", GTK_RESPONSE_ACCEPT, nullptr);
+    gtk_file_chooser_set_show_hidden(GTK_FILE_CHOOSER(dlg), TRUE);
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
         char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
         try {
@@ -552,28 +545,9 @@ GtkWidget* AppWindow::build_settings_tab() {
     gtk_label_set_xalign(GTK_LABEL(vst2_lbl), 0.0f);
     gtk_grid_attach(GTK_GRID(grid), vst2_lbl, 0, row, 1, 1);
 
-    settings_vst2_combo = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings_vst2_combo),
-                                   "Centralized (~/.vst/vstbridge/)");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(settings_vst2_combo),
-                                   "Inline (next to .dll)");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(settings_vst2_combo), 0);
-    gtk_widget_set_tooltip_text(settings_vst2_combo,
-        "Centralized: all VST2 bridges go to ~/.vst/vstbridge/\n"
-        "Inline: bridge is placed next to each Windows .dll file");
-    gtk_grid_attach(GTK_GRID(grid), settings_vst2_combo, 1, row, 2, 1);
-    ++row;
-
-    // Skip verify
-    GtkWidget* nv_lbl = gtk_label_new("Skip verify:");
-    gtk_label_set_xalign(GTK_LABEL(nv_lbl), 0.0f);
-    gtk_grid_attach(GTK_GRID(grid), nv_lbl, 0, row, 1, 1);
-
-    settings_noverify_sw = gtk_switch_new();
-    gtk_widget_set_halign(settings_noverify_sw, GTK_ALIGN_START);
-    gtk_widget_set_tooltip_text(settings_noverify_sw,
-        "Skip the Wine/vstbridge compatibility check that runs after every sync");
-    gtk_grid_attach(GTK_GRID(grid), settings_noverify_sw, 1, row, 1, 1);
+    GtkWidget* vst2_mode_lbl = gtk_label_new("Centralized (~/.vst/vstbridge/)");
+    gtk_widget_set_halign(vst2_mode_lbl, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(grid), vst2_mode_lbl, 1, row, 2, 1);
     ++row;
 
     // Apply

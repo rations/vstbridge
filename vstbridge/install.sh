@@ -2,10 +2,8 @@
 # vstbridge installer — installs pre-built binaries from a release tarball.
 #
 # Usage:
-#   ./install.sh              # user install  (~/.local/...)
-#   ./install.sh --system     # system-wide   (/usr/local/bin, /usr/share/...)
-#   sudo ./install.sh         # system-wide   (detected via root UID)
-#   ./install.sh --uninstall [--system]
+#   ./install.sh              # user install (~/.local/share/vstbridge, ~/.local/share/applications)
+#   ./install.sh --uninstall  # remove installed files
 
 set -e
 
@@ -13,41 +11,27 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 
-SYSTEM=0
 UNINSTALL=0
 
 for arg in "$@"; do
     case "$arg" in
-        --system)    SYSTEM=1 ;;
         --uninstall) UNINSTALL=1 ;;
         --help|-h)
-            echo "Usage: $0 [--system] [--uninstall]"
+            echo "Usage: $0 [--uninstall]"
             echo "  (no flags)   Install for the current user"
-            echo "  --system     Install system-wide (or run as root)"
             echo "  --uninstall  Remove installed files"
             exit 0
             ;;
     esac
 done
 
-if [ "$(id -u)" -eq 0 ]; then
-    SYSTEM=1
-fi
-
-if [ "$SYSTEM" -eq 1 ]; then
-    BIN_DIR="/usr/local/bin"
-    APPS_DIR="/usr/share/applications"
-    DATA_DIR="/usr/local/share/vstbridge"
-else
-    BIN_DIR="${XDG_DATA_HOME:-$HOME/.local}/bin"
-    APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-    DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/vstbridge"
-fi
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/vstbridge"
+APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 
 # ── Uninstall ────────────────────────────────────────────────────────────────
 
 if [ "$UNINSTALL" -eq 1 ]; then
-    echo "Removing bridge files from $DATA_DIR"
+    echo "Removing bridge and tool files from $DATA_DIR"
     rm -f \
         "$DATA_DIR"/libvstbridge-vst2.so \
         "$DATA_DIR"/libvstbridge-vst3.so \
@@ -58,12 +42,10 @@ if [ "$UNINSTALL" -eq 1 ]; then
         "$DATA_DIR"/vstbridge-host.exe \
         "$DATA_DIR"/vstbridge-host.exe.so \
         "$DATA_DIR"/vstbridge-host-32.exe \
-        "$DATA_DIR"/vstbridge-host-32.exe.so
+        "$DATA_DIR"/vstbridge-host-32.exe.so \
+        "$DATA_DIR"/vstbridgectl \
+        "$DATA_DIR"/vstbridgectl-gtk
 
-    echo "Removing $BIN_DIR/vstbridgectl"
-    rm -f "$BIN_DIR/vstbridgectl"
-    echo "Removing $BIN_DIR/vstbridgectl-gtk"
-    rm -f "$BIN_DIR/vstbridgectl-gtk"
     echo "Removing $APPS_DIR/vstbridgectl-gtk.desktop"
     rm -f "$APPS_DIR/vstbridgectl-gtk.desktop"
 
@@ -90,7 +72,7 @@ do
     fi
 done
 
-# ── Install bridge data files ─────────────────────────────────────────────────
+# ── Install all files to ~/.local/share/vstbridge/ ───────────────────────────
 
 mkdir -p "$DATA_DIR"
 
@@ -104,7 +86,9 @@ for f in \
     vstbridge-host.exe \
     vstbridge-host.exe.so \
     vstbridge-host-32.exe \
-    vstbridge-host-32.exe.so
+    vstbridge-host-32.exe.so \
+    vstbridgectl \
+    vstbridgectl-gtk
 do
     if [ -f "$SCRIPT_DIR/$f" ]; then
         cp "$SCRIPT_DIR/$f" "$DATA_DIR/$f"
@@ -112,26 +96,26 @@ do
     fi
 done
 
-echo "Installed bridge files to: $DATA_DIR"
+echo "Installed files to: $DATA_DIR"
 
-# ── Install CLI tool ──────────────────────────────────────────────────────────
-
-mkdir -p "$BIN_DIR"
-cp "$SCRIPT_DIR/vstbridgectl" "$BIN_DIR/vstbridgectl"
-chmod 755 "$BIN_DIR/vstbridgectl"
-echo "Installed:                 $BIN_DIR/vstbridgectl"
-
-# ── Install GUI tool ──────────────────────────────────────────────────────────
-
-cp "$SCRIPT_DIR/vstbridgectl-gtk" "$BIN_DIR/vstbridgectl-gtk"
-chmod 755 "$BIN_DIR/vstbridgectl-gtk"
-echo "Installed:                 $BIN_DIR/vstbridgectl-gtk"
-
-# ── Install desktop entry ─────────────────────────────────────────────────────
+# ── Install desktop entry (with full path to binary) ─────────────────────────
 
 mkdir -p "$APPS_DIR"
-cp "$SCRIPT_DIR/vstbridgectl-gtk.desktop" "$APPS_DIR/vstbridgectl-gtk.desktop"
-echo "Installed:                 $APPS_DIR/vstbridgectl-gtk.desktop"
+cat > "$APPS_DIR/vstbridgectl-gtk.desktop" << EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=vstbridgectl
+GenericName=Wine Plugin Manager
+Comment=Manage vstbridge Wine plugin installations
+Exec=$DATA_DIR/vstbridgectl-gtk
+Icon=preferences-system
+Categories=AudioVideo;Audio;Multimedia;
+Terminal=false
+Keywords=vst;vst3;clap;wine;vstbridge;plugin;audio;
+EOF
+
+echo "Installed desktop entry: $APPS_DIR/vstbridgectl-gtk.desktop"
 
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$APPS_DIR" 2>/dev/null || true
@@ -144,22 +128,10 @@ echo "vstbridge installed successfully."
 echo ""
 echo "Next steps:"
 echo "  1. Tell vstbridgectl where vstbridge is installed:"
-echo "     vstbridgectl set --path=$DATA_DIR"
+echo "     $DATA_DIR/vstbridgectl set --path=$DATA_DIR"
 echo "  2. Add your Windows plugin directories, for example:"
-echo "     vstbridgectl add ~/.wine/drive_c/Program\ Files/VstPlugins"
+echo "     $DATA_DIR/vstbridgectl add ~/.wine/drive_c/Program\ Files/VstPlugins"
 echo "  3. Sync plugins:"
-echo "     vstbridgectl sync"
-echo "  Or open the GUI:  vstbridgectl-gtk"
-
-# Warn if user bin dir is not in PATH
-if [ "$SYSTEM" -eq 0 ]; then
-    case ":$PATH:" in
-        *":$BIN_DIR:"*) ;;
-        *)
-            echo ""
-            echo "Note: $BIN_DIR is not in your PATH."
-            echo "Add this to your shell profile (~/.profile or ~/.bashrc):"
-            echo "  export PATH=\"\$PATH:$BIN_DIR\""
-            ;;
-    esac
-fi
+echo "     $DATA_DIR/vstbridgectl sync"
+echo "  Or launch the GUI from your application menu, or run:"
+echo "     $DATA_DIR/vstbridgectl-gtk"
