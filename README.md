@@ -42,6 +42,85 @@ The GUI has four tabs:
 
 ---
 
+## Installation
+
+Download the latest release tarball from the [releases page](https://github.com/rations/vstbridge/releases), then extract and run the installer:
+
+```bash
+tar -xf vstbridge-0.0.1.tar.gz
+cd vstbridge
+chmod +x install.sh
+./install.sh
+```
+
+The installer copies everything to `~/.local/share/vstbridge/` and adds `vstbridgectl-gtk` to your application menu. No root or sudo is required.
+
+After installing, open **vstbridgectl** from your application menu, or run it directly:
+
+```bash
+~/.local/share/vstbridge/vstbridgectl-gtk
+```
+
+### Directories tab
+
+Add the folders on your system that contain Windows VST2, VST3, or CLAP plugin files. Typical locations inside a Wine prefix are:
+
+- `~/.wine/drive_c/Program Files/VstPlugins` — VST2 plugins
+- `~/.wine/drive_c/Program Files/Common Files/VST3` — VST3 plugins
+- `~/.wine/drive_c/Program Files/Common Files/CLAP` — CLAP plugins
+
+Click **Add** to open a folder browser. Hidden directories such as `.wine` are visible in the browser. Add as many directories as needed, then move to the Sync tab.
+
+### Sync tab
+
+Click **Sync** to create the bridge `.so` files for every plugin found in your directories. The output log shows what was added, skipped, or failed. The available options are:
+
+- **Force** — recreate all bridges even if they are already up to date
+- **Prune** — remove bridges for plugins that no longer exist
+- **Verbose** — show detailed output for every plugin processed
+- **No verify** — skip the Wine/vstbridge compatibility check (useful if the check gives a false warning)
+
+Run a sync whenever you install or remove Windows plugins. If the output says "found N leftover files", tick **Prune** and sync again to remove old bridge files that no longer correspond to any plugin.
+
+### Status tab
+
+Shows the currently installed vstbridge version, the detected Wine version, and whether the bridge files are found at the configured path. Use this to confirm everything is set up correctly.
+
+### Settings tab
+
+The vstbridge path is pre-configured to `~/.local/share/vstbridge` by the installer and does not need to be changed. You would only use this tab if you have moved the bridge files to a different location.
+
+VST2 plugins are installed in centralized mode — vstbridgectl creates `~/.vst/vstbridge/` and mirrors your plugin directory structure inside it, placing the bridge `.so` alongside a copy of the Windows `.dll`. For example, a plugin at `~/.wine/drive_c/Program Files/VstPlugins/Toontrack/Superior Drummer.dll` becomes `~/.vst/vstbridge/Toontrack/Superior Drummer.so`.
+
+### Configuring your DAW
+
+After syncing, point your DAW at the vstbridge output directories so it can find the bridge plugins:
+
+| Plugin format | DAW scan path |
+|---------------|--------------|
+| VST2 | `~/.vst/vstbridge/` |
+| VST3 | `~/.vst3/vstbridge/` |
+| CLAP | `~/.clap/vstbridge/` |
+
+Add whichever paths apply to your plugin formats, then do a full plugin rescan in your DAW.
+
+If you are migrating from yabridge, update your DAW's scan paths from `~/.vst/yabridge/`, `~/.vst3/yabridge/`, and `~/.clap/yabridge/` to the vstbridge equivalents above.
+
+---
+
+## Uninstalling
+
+From the extracted release directory, run:
+
+```bash
+chmod +x uninstall.sh
+./uninstall.sh
+```
+
+This removes all files from `~/.local/share/vstbridge/` and the desktop entry. Your plugin configuration (`~/.config/vstbridgectl/config.toml`) and any per-plugin `vstbridge.toml` files are left untouched.
+
+---
+
 ## Building from source
 
 vstbridge uses Meson + Ninja and cross-compiles the Wine-side host binary with `winegcc-stable`/`wineg++-stable`.
