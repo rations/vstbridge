@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic
 Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.2] - 2026-06-06
+
+### Changed
+
+- Rebuilt on Devuan Daedalus / Debian 12 Bookworm. Release binaries now require
+  glibc 2.34 and libstdc++ from GCC 11, making them compatible with Ubuntu 22.04
+  LTS, Fedora 35+, RHEL/AlmaLinux/Rocky Linux 9, Arch Linux, and all distros
+  from late 2021 onwards. The 0.0.1 binaries were built on Devuan Excalibur
+  (Debian 13 Trixie) and required glibc 2.40, which excluded most current stable
+  distros.
+
+### Build fixes
+
+- Added explicit `-lstdc++` to the Wine host executable link args. Wine 11.x
+  from the WineHQ apt repository does not automatically link the C++ runtime for
+  Winelib EXE targets on Debian/Devuan, causing undefined references to
+  `__cxa_guard_acquire`, `operator new`, `operator delete`, and other C++ ABI
+  symbols. Specifying `-lstdc++` explicitly is harmless on systems where the
+  linker was already adding it.
+
+## [0.0.1] - 2026-05-20
+
+### Added
+
+- Fork of yabridge 5.1.1. All credit for the core bridging architecture, IPC
+  design, chainloader system, and VST3/CLAP compatibility work belongs to
+  Robbert van der Helm and the yabridge contributors.
+
+- **Wine ≥ 9.21 plugin GUI fix.** Upstream yabridge 5.1.1 breaks with Wine
+  9.21 and later: plugins render their GUI but are completely non-interactive.
+  The root cause is a `wm_state_serial` deadlock in Wine's XEmbed implementation.
+  When a plugin window is embedded, `make_window_embedded()` sets
+  `wm_state_serial` and waits for a `WM_STATE` PropertyNotify that never arrives
+  for embedded windows, permanently blocking `window_update_client_config`. The
+  Win32 HWND rect stays at `{0,0,w,h}` instead of the true screen position, so
+  mouse clicks land outside the plugin window and are discarded.
+
+  The fix (`src/wine-host/editor.cpp`): in XEmbed mode, `fix_local_coordinates()`
+  now calls `SetWindowPos()` directly instead of sending a `ConfigureNotify`
+  event. `SetWindowPos()` updates the HWND rect without going through the
+  `wm_state_serial`-gated path. Wine's embedded-window guard in
+  `window_set_config` then prevents the X11 window from moving visually, so the
+  window stays correctly positioned on screen and mouse input works.
+
+- **XEmbed enabled by default.** `editor_xembed` is now `true` by default in
+  `src/common/configuration.h`, as the fix above depends on XEmbed mode being
+  active.
+
+- **GTK3 GUI for vstbridgectl.** The upstream yabridgectl management tool is
+  command-line only. vstbridge adds `vstbridgectl-gtk`, a GTK3 graphical
+  interface with four tabs:
+  - *Directories* — add and remove Windows plugin scan directories
+  - *Sync* — run sync with force/prune/verbose/no-verify options; live output
+    shown in window
+  - *Status* — show installed vstbridge version, detected Wine version, and
+    bridge file status
+  - *Settings* — set vstbridge installation path and VST2 install mode
+
 ## [5.1.1] - 2024-11-04
 
 ### Fixed
