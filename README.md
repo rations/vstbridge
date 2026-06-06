@@ -125,33 +125,33 @@ This removes all files from `~/.local/share/vstbridge/` and the desktop entry. Y
 
 vstbridge uses Meson + Ninja and cross-compiles the Wine-side host binary with `winegcc-stable`/`wineg++-stable`.
 
-### Prerequisites
+### Prerequisites — Debian/Ubuntu/Devuan (WineHQ packages)
 
-You need Wine Staging (for `winegcc-stable`/`wineg++-stable`) plus the standard build tools. On Debian/Ubuntu:
-
-```bash
-sudo apt install meson ninja-build pkg-config g++ libxcb1-dev uuid-dev
-```
-
-On Arch Linux, install `wine-staging` from the AUR. On Fedora, use `dnf`.
-
-**32-bit bitbridge prerequisites (`-Dbitbridge=true` only) — Debian/Ubuntu**
-
-When Wine Staging is installed from the WineHQ apt repository it does not include the 32-bit Windows import libraries (`.a` files) that `winegcc` needs. The WineHQ package installs to `/opt/wine-staging/`, but `winegcc` looks in the standard system paths under `/usr/lib/wine/`. You need to install `wine32` from the Debian/Ubuntu repositories to provide those libraries, then create two symlinks so `winegcc` can find them:
+You need the WineHQ apt repository configured with both `winehq-staging` (for the Wine runtime) and the following packages:
 
 ```bash
-sudo apt install g++-multilib libxcb1-dev:i386 uuid-dev:i386 wine32
-
-# Point the standard wine i386-windows dir at the staging copy
-sudo rm /usr/lib/wine/i386-windows
-sudo ln -s /opt/wine-staging/lib/wine/i386-windows /usr/lib/wine/i386-windows
-
-# Create the i386-unix dir that winegcc also looks for
-sudo mkdir -p /usr/lib/x86_64-linux-gnu/wine/wine
-sudo ln -s /opt/wine-staging/lib/wine/i386-unix /usr/lib/x86_64-linux-gnu/wine/wine/i386-unix
+sudo apt install meson ninja-build pkg-config g++ libxcb1-dev uuid-dev wine-stable-dev wine-staging-dev
 ```
 
-On Arch Linux, wine-staging installs into `/usr/` alongside the system Wine and this step is not needed. On other distros the paths will differ — adjust the symlink targets to wherever your wine-staging installation keeps its `i386-windows` and `i386-unix` directories.
+- `wine-stable-dev` provides the Wine development headers used during compilation.
+- `wine-staging-dev` provides the version-matched Wine import libraries that the linker needs.
+
+`winegcc-stable`/`wineg++-stable` do not exist as standalone binaries in the WineHQ packages. Create them as symlinks to the staging compiler, then create the include directory and link the headers into it:
+
+```bash
+sudo ln -s /usr/bin/winegcc /usr/local/bin/winegcc-stable
+sudo ln -s /usr/bin/wineg++ /usr/local/bin/wineg++-stable
+sudo mkdir -p /opt/wine-staging/include
+sudo ln -s /opt/wine-stable/include/wine /opt/wine-staging/include/wine
+```
+
+On Arch Linux, install `wine-staging` from the AUR; the compiler is named differently there. On Fedora, use `dnf`.
+
+**32-bit bitbridge prerequisites (`-Dbitbridge=true` only) — Debian/Ubuntu/Devuan**
+
+```bash
+sudo apt install g++-multilib libxcb1-dev:i386 uuid-dev:i386
+```
 
 ### Building
 ```bash

@@ -393,7 +393,7 @@ if is_64bit_system
     include_directories : include_dir,
     dependencies : host_64bit_deps,
     cpp_args : compiler_options + wine_64bit_compiler_options,
-    link_args : ['-m64'],
+    link_args : ['-m64', '-lstdc++'],
   )
 endif
 
@@ -405,6 +405,6 @@ if with_bitbridge
     include_directories : include_dir,
     dependencies : host_32bit_deps,
     cpp_args : compiler_options + wine_32bit_compiler_options,
-    link_args : ['-m32'],
+    link_args : ['-m32', '-lstdc++'],
   )
 endif
