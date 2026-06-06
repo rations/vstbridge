@@ -40,6 +40,26 @@ The GUI has four tabs:
 - A 64-bit Linux DAW (REAPER, Ardour etc.)
 - GTK3 (for the vstbridgectl-gtk GUI only)
 
+### Compatibility
+
+Release binaries require glibc ≥ 2.34 and libstdc++ ≥ GCC 11 (built on Devuan 5 Daedalus / Debian 12 Bookworm).
+
+| Distro | Status |
+|--------|--------|
+| Debian 12 Bookworm / Devuan Daedalus | ✓ |
+| Debian 13 Trixie / Devuan Excalibur | ✓ |
+| Ubuntu 22.04 LTS and newer | ✓ |
+| Linux Mint 21+ | ✓ |
+| Pop!_OS 22.04+ | ✓ |
+| Fedora 35+ | ✓ |
+| RHEL 9 / AlmaLinux 9 / Rocky Linux 9 | ✓ |
+| openSUSE Leap 15.6 / Tumbleweed | ✓ |
+| Arch Linux / Manjaro / EndeavourOS | ✓ |
+| Void Linux (glibc variant) | ✓ |
+| Ubuntu 20.04 LTS | ✗ glibc 2.31 |
+| Debian 11 Bullseye | ✗ glibc 2.31 |
+| RHEL 8 / AlmaLinux 8 / Rocky Linux 8 | ✗ glibc 2.28 |
+
 ---
 
 ## Installation
@@ -47,7 +67,7 @@ The GUI has four tabs:
 Download the latest release tarball from the [releases page](https://github.com/rations/vstbridge/releases), then extract and run the installer:
 
 ```bash
-tar -xf vstbridge-0.0.1.tar.gz
+tar -xf vstbridge-0.0.2.tar.gz
 cd vstbridge
 chmod +x install.sh
 ./install.sh
