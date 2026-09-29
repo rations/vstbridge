@@ -71,7 +71,7 @@ deps: $(DEP_DIR)/cli11/.git $(DEP_DIR)/nlohmann/.git $(DEP_DIR)/tomlplusplus/.gi
 
 # ─── Build rules ──────────────────────────────────────────────────────────────
 
-$(BUILD_DIR)/%.o: src/%.cpp | $(BUILD_DIR) $(BUILD_DIR)/actions
+$(BUILD_DIR)/%.o: src/%.cpp | $(BUILD_DIR) $(BUILD_DIR)/actions deps
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/actions/%.o: src/actions/%.cpp | $(BUILD_DIR)/actions deps
