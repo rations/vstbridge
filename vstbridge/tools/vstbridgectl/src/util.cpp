@@ -58,7 +58,9 @@ LibArchitecture get_elf_architecture(const fs::path& path) {
 
     if (machine == 0x03)
         return LibArchitecture::Lib32;
-    if (machine == 0x3E)
+    if (machine == 0x3E)   // EM_X86_64
+        return LibArchitecture::Lib64;
+    if (machine == 0xB7)   // EM_AARCH64
         return LibArchitecture::Lib64;
 
     throw std::runtime_error("'" + path.string() + "' is not a recognized ELF machine ISA");

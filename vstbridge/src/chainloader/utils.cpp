@@ -60,12 +60,17 @@ void* find_plugin_library(const std::string& name) {
         // might be relevant for some of the `/usr/local/*` locations (although
         // you really, really shouldn't install yabridge there, please, thank
         // you). Yabridgectl searches through these same directories.
+#ifdef __aarch64__
+#define VSTBRIDGE_MULTIARCH_TRIPLET "aarch64-linux-gnu"
+#else
+#define VSTBRIDGE_MULTIARCH_TRIPLET "x86_64-linux-gnu"
+#endif
         for (const auto& lib_dir : {
                  "/usr/lib",
-                 "/usr/lib/x86_64-linux-gnu",
+                 "/usr/lib/" VSTBRIDGE_MULTIARCH_TRIPLET,
                  "/usr/lib64",
                  "/usr/local/lib",
-                 "/usr/local/lib/x86_64-linux-gnu",
+                 "/usr/local/lib/" VSTBRIDGE_MULTIARCH_TRIPLET,
                  "/usr/local/lib64",
              }) {
             const fs::path candidate = fs::path(lib_dir) / name;

@@ -88,7 +88,7 @@ fs::path Vst3Module::target_native_module_path(const VstbridgeFiles* files) cons
         if (files->vst3_chainloader->second == LibArchitecture::Lib32)
             return base / "i386-linux" / name;
     }
-    return base / "x86_64-linux" / name;
+    return base / NATIVE_VST3_ARCH_64 / name;
 }
 
 fs::path Vst3Module::target_windows_module_path() const {

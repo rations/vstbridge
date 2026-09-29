@@ -1,0 +1,86 @@
+# Build vstbridge for aarch64 (Raspberry Pi 5 / Pivuan).
+#
+# Built natively on GitHub's arm64 runner in a Debian trixie container, the same setup as
+# Pivuan's own apps (rations/build: .github/workflows/pivuan-apps.yml): trixie has the same
+# libraries as Devuan excalibur.
+#
+# For now this builds the native side only (-Dwine-host=none): the plugin and chainloader
+# libraries and vstbridgectl. Wine does not support Winelib hosts on aarch64, so the plugin
+# host will be an ARM64EC PE executable, added here once it exists.
+
+name: aarch64 build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [arm64]
+    paths:
+      - "vstbridge/**"
+      - ".github/workflows/aarch64.yml"
+  pull_request:
+    branches: [arm64]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aarch64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native libraries and vstbridgectl
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Build dependencies
+        run: |
+          set -eu
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends \
+            build-essential meson ninja-build pkg-config cmake git ca-certificates file python3 \
+            libdbus-1-dev libgtk-3-dev
+
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        working-directory: vstbridge
+        run: meson setup build --buildtype=release -Dwine-host=none
+
+      - name: Build plugin libraries
+        working-directory: vstbridge
+        run: ninja -C build
+
+      - name: Build vstbridgectl
+        working-directory: vstbridge/tools/vstbridgectl
+        run: make -j"$(nproc)"
+
+      - name: Check the binaries are aarch64
+        run: |
+          set -eu
+          fail=0
+          for f in vstbridge/build/lib*.so vstbridge/tools/vstbridgectl/build/vstbridgectl*; do
+            desc="$(file -b "$f")"
+            echo "$f: $desc"
+            case "$desc" in
+              *"ARM aarch64"*) ;;
+              *) echo "::error::$f is not an aarch64 binary"; fail=1 ;;
+            esac
+          done
+          exit "$fail"
+
+      - name: Stage
+        run: |
+          set -eu
+          dist=dist/vstbridge-aarch64
+          mkdir -p "$dist"
+          cp -a vstbridge/build/lib*.so "$dist/"
+          cp -a vstbridge/tools/vstbridgectl/build/vstbridgectl vstbridge/tools/vstbridgectl/build/vstbridgectl-gtk "$dist/"
+          tar -C dist -czf dist/vstbridge-aarch64.tar.gz vstbridge-aarch64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vstbridge-aarch64
+          path: dist/vstbridge-aarch64.tar.gz

@@ -2,7 +2,7 @@
 # to keep all relevant files in the root of the build directory, and Meson
 # doesn't have a way to customize that yet.
 
-if is_64bit_system
+if with_64bit_host
   host_64bit_deps = [
     configuration_dep,
 

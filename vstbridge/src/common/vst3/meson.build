@@ -44,7 +44,7 @@ vst3_sdk_native = static_library(
 )
 
 # We need a separate host SDK dependency for our Wine plugin host applications
-if is_64bit_system
+if with_64bit_host
   vst3_base_wine_64bit = static_library(
     'vst3_base_wine_64bit',
     vst3.get_variable('base_sources'),
@@ -111,7 +111,7 @@ vst3_sdk_native_dep = declare_dependency(
   compile_args : vst3_compiler_options,
 )
 
-if is_64bit_system
+if with_64bit_host
   vst3_sdk_hosting_wine_64bit_dep = declare_dependency(
     link_with : vst3_sdk_hosting_wine_64bit,
     include_directories : vst3_include_dir,

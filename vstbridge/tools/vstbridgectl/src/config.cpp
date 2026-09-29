@@ -219,10 +219,10 @@ VstbridgeFiles Config::files() const {
     // Standard library search directories
     static const std::vector<fs::path> lib_dirs = {
         "/usr/lib",
-        "/usr/lib/x86_64-linux-gnu",
+        fs::path("/usr/lib") / NATIVE_MULTIARCH_TRIPLET,
         "/usr/lib64",
         "/usr/local/lib",
-        "/usr/local/lib/x86_64-linux-gnu",
+        fs::path("/usr/local/lib") / NATIVE_MULTIARCH_TRIPLET,
         "/usr/local/lib64",
     };
 

@@ -27,6 +27,16 @@ inline std::string arch_to_string(LibArchitecture arch) {
     return arch == LibArchitecture::Lib32 ? "32-bit" : "64-bit";
 }
 
+// The multiarch triplet and VST3 bundle directory for native libraries on the
+// architecture vstbridgectl was built for. The chainloaders always match it.
+#ifdef __aarch64__
+inline constexpr const char* NATIVE_MULTIARCH_TRIPLET = "aarch64-linux-gnu";
+inline constexpr const char* NATIVE_VST3_ARCH_64 = "aarch64-linux";
+#else
+inline constexpr const char* NATIVE_MULTIARCH_TRIPLET = "x86_64-linux-gnu";
+inline constexpr const char* NATIVE_VST3_ARCH_64 = "x86_64-linux";
+#endif
+
 // The x86-win / x86_64-win directory name inside a VST3 bundle
 inline const char* vst_arch_string(LibArchitecture arch) {
     return arch == LibArchitecture::Lib32 ? "x86-win" : "x86_64-win";

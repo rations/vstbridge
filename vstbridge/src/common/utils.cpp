@@ -19,7 +19,11 @@
 #include <stdlib.h>
 
 #include <sched.h>
+#if defined(__aarch64__) || defined(__arm64ec__)
+#include <cstdint>
+#else
 #include <xmmintrin.h>
+#endif
 
 namespace fs = ghc::filesystem;
 
@@ -216,6 +220,35 @@ std::string url_encode_path(std::string path) {
     return escaped;
 }
 
+#if defined(__aarch64__) || defined(__arm64ec__)
+// On ARM the flush-to-zero flag is the FZ bit in the FPCR register. Under
+// ARM64EC, emulated x86_64 code sees this bit as MXCSR's FTZ flag.
+namespace {
+constexpr uint64_t fpcr_fz_bit = 1ull << 24;
+
+uint64_t get_fpcr() noexcept {
+    uint64_t fpcr;
+    asm volatile("mrs %0, fpcr" : "=r"(fpcr));
+    return fpcr;
+}
+
+void set_fpcr(uint64_t fpcr) noexcept {
+    asm volatile("msr fpcr, %0" : : "r"(fpcr));
+}
+}  // namespace
+
+ScopedFlushToZero::ScopedFlushToZero() noexcept {
+    const uint64_t fpcr = get_fpcr();
+    old_ftz_mode_ = static_cast<unsigned int>(fpcr & fpcr_fz_bit);
+    set_fpcr(fpcr | fpcr_fz_bit);
+}
+
+ScopedFlushToZero::~ScopedFlushToZero() noexcept {
+    if (old_ftz_mode_) {
+        set_fpcr((get_fpcr() & ~fpcr_fz_bit) | *old_ftz_mode_);
+    }
+}
+#else
 ScopedFlushToZero::ScopedFlushToZero() noexcept {
     old_ftz_mode_ = _MM_GET_FLUSH_ZERO_MODE();
     _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
@@ -226,6 +259,7 @@ ScopedFlushToZero::~ScopedFlushToZero() noexcept {
         _MM_SET_FLUSH_ZERO_MODE(*old_ftz_mode_);
     }
 }
+#endif
 
 ScopedFlushToZero::ScopedFlushToZero(ScopedFlushToZero&& o) noexcept
     : old_ftz_mode_(std::move(o.old_ftz_mode_)) {

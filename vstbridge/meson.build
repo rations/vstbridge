@@ -26,6 +26,18 @@ with_clap = get_option('clap')
 with_system_asio = get_option('system-asio')
 with_winedbg = get_option('winedbg')
 with_vst3 = get_option('vst3')
+with_wine_host = get_option('wine-host') == 'winelib'
+# The Winelib hosts can only be built on x86 and x86_64. On aarch64 the
+# plugin host will be an ARM64EC PE executable instead, as Wine does not support
+# Winelib ELF executables there.
+with_64bit_host = with_wine_host and is_64bit_system
+
+if with_wine_host and build_machine.cpu_family() not in ['x86', 'x86_64']
+  error('Winelib plugin hosts can only be built on x86 and x86_64. Use \'-Dwine-host=none\' to only build the native plugin libraries.')
+endif
+if with_bitbridge and not with_wine_host
+  error('The \'bitbridge\' option requires \'-Dwine-host=winelib\'.')
+endif
 
 # Cookies can't be stored correctly when the native host is 32-bit and the
 # bridged plugin is 64-bit
@@ -56,16 +68,19 @@ host_name_32bit = 'vstbridge-host-32'
 compiler_options = [
   '-fvisibility=hidden',
   '-fvisibility-inlines-hidden',
-  # We use an intrinsic to force flush-to-zero. SSE2 is always enabled in x86_64
-  # CPUs, but when we're compiling the 32-bit bitbridge we need to manually add
-  # this flag.
-  '-msse2',
   # FIXME: Bitsery relies on the definitions from `<cstdint>`, which is no
   #        longer included transitively with GCC 13. This should be removed once
   #        bitsery is updated to support GCC 13.
   '-include',
   'cstdint',
 ]
+
+# We use an intrinsic to force flush-to-zero. SSE2 is always enabled in x86_64
+# CPUs, but when we're compiling the 32-bit bitbridge we need to manually add
+# this flag. On ARM the FPCR register is used instead.
+if build_machine.cpu_family() in ['x86', 'x86_64']
+  compiler_options += '-msse2'
+endif
 
 chainloader_compiler_options = [
   # We use our process library for sending notifications from the chainloaders,
@@ -142,7 +157,7 @@ endif
 winelib_check = '''#ifndef __WINE__
 #error 1
 #endif'''
-if not meson.get_compiler('cpp').compiles(winelib_check)
+if with_wine_host and not meson.get_compiler('cpp').compiles(winelib_check)
   error('You need to set up a cross compiler, check the README for compilation instructions.')
 endif
 
@@ -159,7 +174,9 @@ wine_version = run_command(
   'sh', '-c', '''wine --version | grep --only-matching -E '[0-9]+\.[0-9]+(-?rc[0-9]+)?' | head -n1''',
   check : false
 )
-if wine_version.returncode() == 0
+if not with_wine_host
+  message('Not building the Wine plugin host, skipping the Wine version checks')
+elif wine_version.returncode() == 0
   wine_version = wine_version.stdout()
   message('Targetting Wine @0@'.format(wine_version))
 
@@ -220,7 +237,7 @@ include_dir = include_directories('src/include', is_system : true)
 # to properly do this, please let me know!
 winegcc = meson.get_compiler('cpp', native : false)
 
-if is_64bit_system
+if with_64bit_host
   xcb_64bit_dep = dependency('xcb')
 endif
 if with_32bit_libraries or with_bitbridge
@@ -385,7 +402,7 @@ if with_vst3
   )
 endif
 
-if is_64bit_system
+if with_64bit_host
   executable(
     host_name_64bit,
     host_sources,

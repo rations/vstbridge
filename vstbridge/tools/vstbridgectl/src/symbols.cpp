@@ -122,8 +122,9 @@ Pe32Info parse_pe32_native(const fs::path& path) {
     COFFHeader coff = read_at<COFFHeader>(data, coff_off);
 
     // 0x014C = IMAGE_FILE_MACHINE_I386 (32-bit x86)
-    // 0x8664 = IMAGE_FILE_MACHINE_AMD64 (64-bit)
-    bool is_64 = (coff.machine == 0x8664);
+    // 0x8664 = IMAGE_FILE_MACHINE_AMD64 (64-bit, also used by ARM64EC)
+    // 0xAA64 = IMAGE_FILE_MACHINE_ARM64 (64-bit, including ARM64X)
+    bool is_64 = (coff.machine == 0x8664 || coff.machine == 0xAA64);
 
     // Optional header starts right after COFF header
     size_t opt_off = coff_off + sizeof(COFFHeader);

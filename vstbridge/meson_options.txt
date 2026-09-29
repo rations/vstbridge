@@ -32,6 +32,17 @@ option(
 )
 
 option(
+  'wine-host',
+  type : 'combo',
+  choices : ['winelib', 'none'],
+  value : 'winelib',
+  description : '''How to build the Wine plugin host applications. \'winelib\' builds them
+                   with winegcc, which requires an x86 or x86_64 Wine. \'none\' only builds
+                   the native plugin libraries, which is what an aarch64 build uses until the
+                   ARM64EC plugin host is in place.''',
+)
+
+option(
   'winedbg',
   type : 'boolean',
   value : false,
