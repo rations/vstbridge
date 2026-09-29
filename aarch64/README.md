@@ -20,8 +20,42 @@ through Wine's ARM64EC support and FEX's `libarm64ecfex.dll`.
 
 The `aarch64 Wine and FEX` GitHub Actions workflow runs both scripts on arm64 runners and uploads
 `vstbridge-wine-aarch64.tar.xz` and `vstbridge-fex-aarch64.tar.xz`. The `aarch64 build` workflow
-builds the native vstbridge libraries and vstbridgectl. The plugin host (an ARM64EC PE executable)
-doesn't exist yet.
+builds vstbridge itself into `vstbridge-aarch64.tar.gz`.
+
+## The plugin host on aarch64
+
+Wine can't run Winelib `.exe.so` programs on aarch64, so vstbridge's plugin host is built as a
+regular PE executable instead (`meson setup -Dwine-host=pe --cross-file cross-arm64ec.conf`):
+
+- `vstbridge-host.exe` is ARM64EC code, so it runs natively while the x86_64 plugin it loads
+  runs under FEX in the same process.
+- `vstbridge-host-unixlib.so` is a native aarch64 library that the host loads through Wine's
+  unixlib mechanism. The host calls into it for everything that needs Linux: the Unix domain
+  sockets to the native plugin, the shared memory audio buffers, realtime scheduling, and xcb
+  for the editor embedding (`vstbridge/src/wine-host/unixlib/`).
+
+Wine's own AF_UNIX support (wine-staging's `ws2_32-af_unix` patches) was measured and rejected:
+a 64 byte round trip took about 123 µs, against 13.7 µs through the unixlib and 13.6 µs between
+two native Linux processes on the Pi 5.
+
+The native plugin starts the host with `/opt/vstbridge/wine/bin/wine` (the `wine-loader` build
+option), unless `WINELOADER` is set.
+
+The same host can be built for x86_64 with `--cross-file cross-mingw-x86_64.conf`, for testing it
+with x86_64 Wine.
+
+## Installing vstbridge on the Pi
+
+After the Wine and FEX tarballs below are installed:
+
+```sh
+mkdir -p ~/.local/share/vstbridge
+tar -C ~/.local/share/vstbridge --strip-components=1 -xzf vstbridge-aarch64.tar.gz
+
+# The plugins' directory inside the Wine prefix, then set up the bridged copies
+~/.local/share/vstbridge/vstbridgectl add "$HOME/.wine-vstbridge-arm64/drive_c/Program Files/Common Files/VST3"
+~/.local/share/vstbridge/vstbridgectl sync
+```
 
 ## Trying the Wine build on the Pi
 

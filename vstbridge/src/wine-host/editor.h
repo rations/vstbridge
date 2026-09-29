@@ -23,11 +23,7 @@
 #include <windows.h>
 #include <function2/function2.hpp>
 
-// Use the native version of xcb
-#pragma push_macro("_WIN32")
-#undef _WIN32
-#include <xcb/xcb.h>
-#pragma pop_macro("_WIN32")
+#include "xcb-native.h"
 
 #include "../common/configuration.h"
 #include "../common/logging/common.h"

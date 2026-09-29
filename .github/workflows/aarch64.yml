@@ -4,9 +4,11 @@
 # Pivuan's own apps (rations/build: .github/workflows/pivuan-apps.yml): trixie has the same
 # libraries as Devuan excalibur.
 #
-# For now this builds the native side only (-Dwine-host=none): the plugin and chainloader
-# libraries and vstbridgectl. Wine does not support Winelib hosts on aarch64, so the plugin
-# host will be an ARM64EC PE executable, added here once it exists.
+# Builds the plugin and chainloader libraries, vstbridgectl, and the plugin host. Wine does
+# not support Winelib hosts on aarch64, so the host is an ARM64EC PE executable
+# (-Dwine-host=pe, cross compiled with llvm-mingw) plus the native unixlib it uses for Linux
+# APIs. It runs on the Wine and FEX build from aarch64-wine.yml, installed to
+# /opt/vstbridge/wine.
 
 name: aarch64 build
 
@@ -16,6 +18,8 @@ on:
     branches: [arm64]
     paths:
       - "vstbridge/**"
+      - "aarch64/versions.sh"
+      - "aarch64/lib.sh"
       - ".github/workflows/aarch64.yml"
   pull_request:
     branches: [arm64]
@@ -29,7 +33,7 @@ concurrency:
 
 jobs:
   native:
-    name: Native libraries and vstbridgectl
+    name: Plugin libraries, plugin host and vstbridgectl
     runs-on: ubuntu-24.04-arm
     container: debian:trixie
     env:
@@ -41,27 +45,45 @@ jobs:
           apt-get update -q
           apt-get install -y -q --no-install-recommends \
             build-essential meson ninja-build pkg-config cmake git ca-certificates file python3 \
-            libdbus-1-dev libgtk-3-dev
+            curl xz-utils libdbus-1-dev libgtk-3-dev libxcb1-dev
 
       - uses: actions/checkout@v4
 
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: llvm-mingw-${{ hashFiles('aarch64/versions.sh') }}
+
+      - name: llvm-mingw
+        run: |
+          set -eu
+          . aarch64/versions.sh
+          . aarch64/lib.sh
+          fetch_llvm_mingw "$PWD/toolchain"
+          dirname "$(command -v arm64ec-w64-mingw32-clang++)" >> "$GITHUB_PATH"
+
       - name: Configure
         working-directory: vstbridge
-        run: meson setup build --buildtype=release -Dwine-host=none
+        run: |
+          meson setup build --buildtype=release \
+            -Dwine-host=pe --cross-file cross-arm64ec.conf \
+            -Dwine-loader=/opt/vstbridge/wine/bin/wine
 
-      - name: Build plugin libraries
+      - name: Build plugin libraries and plugin host
         working-directory: vstbridge
         run: ninja -C build
 
       - name: Build vstbridgectl
         working-directory: vstbridge/tools/vstbridgectl
-        run: make -j"$(nproc)"
+        run: make -j"$(nproc)" WINE_LOADER=/opt/vstbridge/wine/bin/wine
 
-      - name: Check the binaries are aarch64
+      - name: Check the binaries
         run: |
           set -eu
           fail=0
-          for f in vstbridge/build/lib*.so vstbridge/tools/vstbridgectl/build/vstbridgectl*; do
+          for f in vstbridge/build/lib*.so vstbridge/build/vstbridge-host-unixlib.so \
+                   vstbridge/tools/vstbridgectl/build/vstbridgectl*; do
             desc="$(file -b "$f")"
             echo "$f: $desc"
             case "$desc" in
@@ -69,6 +91,15 @@ jobs:
               *) echo "::error::$f is not an aarch64 binary"; fail=1 ;;
             esac
           done
+
+          # ARM64EC executables use the x64 machine type in their PE header. The ARM64EC
+          # code is described by the CHPE metadata in the load config.
+          host=vstbridge/build/vstbridge-host.exe
+          file -b "$host"
+          if ! llvm-readobj --coff-load-config "$host" | grep -q '^CHPEMetadata \['; then
+            echo "::error::$host is not an ARM64EC executable"
+            fail=1
+          fi
           exit "$fail"
 
       - name: Stage
@@ -76,7 +107,8 @@ jobs:
           set -eu
           dist=dist/vstbridge-aarch64
           mkdir -p "$dist"
-          cp -a vstbridge/build/lib*.so "$dist/"
+          cp -a vstbridge/build/lib*.so vstbridge/build/vstbridge-host.exe \
+            vstbridge/build/vstbridge-host-unixlib.so "$dist/"
           cp -a vstbridge/tools/vstbridgectl/build/vstbridgectl vstbridge/tools/vstbridgectl/build/vstbridgectl-gtk "$dist/"
           tar -C dist -czf dist/vstbridge-aarch64.tar.gz vstbridge-aarch64
 

@@ -275,10 +275,17 @@ VstbridgeFiles Config::files() const {
 
     auto host_exe = which(VSTBRIDGE_HOST_EXE_NAME);
     std::optional<fs::path> host_exe_so;
+    bool host_is_pe = false;
     if (host_exe) {
         auto so = host_exe->parent_path() / (host_exe->filename().string() + ".so");
-        if (fs::exists(so))
+        auto unixlib = host_exe->parent_path() /
+                       (host_exe->stem().string() + VSTBRIDGE_HOST_UNIXLIB_SUFFIX);
+        if (fs::exists(so)) {
             host_exe_so = so;
+        } else if (fs::exists(unixlib)) {
+            host_exe_so = unixlib;
+            host_is_pe = true;
+        }
     }
 
     auto host_32_exe = which(VSTBRIDGE_HOST_32_EXE_NAME);
@@ -296,6 +303,7 @@ VstbridgeFiles Config::files() const {
         clap_chainloader,
         host_exe,
         host_exe_so,
+        host_is_pe,
         host_32_exe,
         host_32_exe_so,
     };

@@ -19,7 +19,9 @@
 #include <string>
 #include <vector>
 
+#ifndef VSTBRIDGE_PE_HOST
 #include <sys/mman.h>
+#endif
 
 /**
  * A shared memory object that allows audio buffers to be shared between the

@@ -34,6 +34,16 @@ static constexpr const char* VST2_CHAINLOADER_NAME = "libvstbridge-chainloader-v
 static constexpr const char* VST3_CHAINLOADER_NAME = "libvstbridge-chainloader-vst3.so";
 static constexpr const char* VSTBRIDGE_HOST_EXE_NAME = "vstbridge-host.exe";
 static constexpr const char* VSTBRIDGE_HOST_32_EXE_NAME = "vstbridge-host-32.exe";
+// A PE plugin host (aarch64) has no `.exe.so`. Its native code lives in this
+// unixlib next to the executable, e.g. `vstbridge-host-unixlib.so`.
+static constexpr const char* VSTBRIDGE_HOST_UNIXLIB_SUFFIX = "-unixlib.so";
+
+// The Wine binary used when `WINELOADER` is not set. The Makefile's
+// `WINE_LOADER` variable sets this to the same value as vstbridge's
+// `wine-loader` build option.
+#ifndef VSTBRIDGECTL_DEFAULT_WINE_LOADER
+#define VSTBRIDGECTL_DEFAULT_WINE_LOADER "wine"
+#endif
 
 enum class Vst2InstallationLocation { Centralized, Inline };
 
@@ -56,7 +66,12 @@ struct VstbridgeFiles {
     std::optional<std::pair<fs::path, LibArchitecture>> clap_chainloader;
 
     std::optional<fs::path> vstbridge_host_exe;
+    // The host's native library: `vstbridge-host.exe.so` for a Winelib host,
+    // or `vstbridge-host-unixlib.so` for a PE host
     std::optional<fs::path> vstbridge_host_exe_so;
+    // Whether `vstbridge_host_exe` is a PE executable that has to be run
+    // through Wine, instead of a winegcc launcher script
+    bool vstbridge_host_is_pe = false;
     std::optional<fs::path> vstbridge_host_32_exe;
     std::optional<fs::path> vstbridge_host_32_exe_so;
 };

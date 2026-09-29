@@ -234,7 +234,7 @@ Vst2Bridge::Vst2Bridge(MainContext& main_context,
 
     parameters_handler_ = Win32Thread([&]() {
         set_realtime_priority(true);
-        pthread_setname_np(pthread_self(), "parameters");
+        set_current_thread_name("parameters");
 
         sockets_.host_plugin_parameters_.receive_multi<Parameter>(
             [&](Parameter& request, SerializationBufferBase& buffer) {
@@ -261,7 +261,7 @@ Vst2Bridge::Vst2Bridge(MainContext& main_context,
 
     process_replacing_handler_ = Win32Thread([&]() {
         set_realtime_priority(true);
-        pthread_setname_np(pthread_self(), "audio");
+        set_current_thread_name("audio");
 
         // Most plugins will already enable FTZ, but there are a handful of
         // plugins that don't that suffer from extreme DSP load increases when
@@ -640,7 +640,7 @@ class HostCallbackDataConverter : public DefaultDataConverter {
         return DefaultDataConverter::write_value(opcode, value, response);
     }
 
-    Vst2EventResult send_event(asio::local::stream_protocol::socket& socket,
+    Vst2EventResult send_event(ipc::socket& socket,
                                const Vst2Event& event,
                                SerializationBufferBase& buffer) const override {
         if (mutually_recursive_callbacks.contains(event.opcode)) {

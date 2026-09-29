@@ -22,6 +22,9 @@
 #include <version.h>
 
 #include "../common/utils.h"
+#ifdef VSTBRIDGE_PE_HOST
+#include "unixlib/pe.h"
+#endif
 #ifdef WITH_CLAP
 #include "bridges/clap.h"
 #endif
@@ -57,6 +60,27 @@ int VSTBRIDGE_EXPORT
     __cdecl
 #endif
     main(int argc, char* argv[]) {
+#ifdef VSTBRIDGE_PE_HOST
+    // Everything that needs Linux APIs goes through the unixlib, so this needs
+    // to happen first
+    if (const auto error = unixlib::init()) {
+        std::cerr << "Could not initialize the vstbridge plugin host: "
+                  << *error << std::endl;
+        return 1;
+    }
+
+    // The C runtime's `argv` uses the ANSI code page instead of UTF-8
+    const std::vector<std::string> utf8_arguments =
+        unixlib::command_line_arguments();
+    std::vector<char*> utf8_argv;
+    for (const std::string& argument : utf8_arguments) {
+        utf8_argv.push_back(const_cast<char*>(argument.c_str()));
+    }
+    utf8_argv.push_back(nullptr);
+    argc = static_cast<int>(utf8_arguments.size());
+    argv = utf8_argv.data();
+#endif
+
     // For individually hosted plugins we'll pass along the plugin format, the
     // name of the VST2 plugin .dll file or VST3 bundle to load, the base
     // directory for the Unix domain socket endpoints to connect to and the
@@ -131,7 +155,14 @@ int VSTBRIDGE_EXPORT
     } else {
         const std::string plugin_type_str(argv[1]);
         const PluginType plugin_type = plugin_type_from_string(plugin_type_str);
+#ifdef VSTBRIDGE_PE_HOST
+        // The native plugin passes a Linux path. As a PE program the host
+        // works with DOS paths, which is also what the plugin should see.
+        const std::string plugin_location =
+            unixlib::unix_path_to_dos_path(argv[2]);
+#else
         const std::string plugin_location(argv[2]);
+#endif
         const std::string socket_endpoint_path(argv[3]);
         const pid_t parent_pid = std::stoi(argv[4]);
 
@@ -200,7 +231,7 @@ int VSTBRIDGE_EXPORT
         // potentially unsafe events that should always be run from the UI
         // thread will be posted to `main_context`.
         Win32Thread worker_thread([&]() {
-            pthread_setname_np(pthread_self(), "worker");
+            set_current_thread_name("worker");
 
             bridge->run();
 

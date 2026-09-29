@@ -18,7 +18,12 @@
 
 #include <stdlib.h>
 
+#ifdef VSTBRIDGE_PE_HOST
+#include "../wine-host/unixlib/pe.h"
+#else
+#include <pthread.h>
 #include <sched.h>
+#endif
 #if defined(__aarch64__) || defined(__arm64ec__)
 #include <cstdint>
 #else
@@ -55,6 +60,32 @@ fs::path get_temporary_directory() {
     }
 }
 
+#ifdef VSTBRIDGE_PE_HOST
+// The PE plugin host can't call these Linux functions itself, so they're run
+// on the calling thread through the unixlib
+std::optional<int> get_realtime_priority() noexcept {
+    unixlib::RealtimePriorityArgs args{};
+    unixlib::call(unixlib::sched_get_realtime_priority, &args);
+    if (args.sched_fifo) {
+        return args.priority;
+    } else {
+        return std::nullopt;
+    }
+}
+
+bool set_realtime_priority(bool sched_fifo, int priority) noexcept {
+    unixlib::RealtimePriorityArgs args{.sched_fifo = sched_fifo,
+                                       .priority = priority};
+    unixlib::call(unixlib::sched_set_realtime_priority, &args);
+
+    return args.success;
+}
+
+void set_current_thread_name(const char* name) noexcept {
+    unixlib::ThreadNameArgs args{.name = name};
+    unixlib::call(unixlib::thread_set_name, &args);
+}
+#else
 std::optional<int> get_realtime_priority() noexcept {
     sched_param current_params{};
     if (sched_getparam(0, &current_params) == 0 &&
@@ -88,6 +119,11 @@ std::optional<rlim_t> get_rttime_limit() noexcept {
         return std::nullopt;
     }
 }
+
+void set_current_thread_name(const char* name) noexcept {
+    pthread_setname_np(pthread_self(), name);
+}
+#endif
 
 bool is_watchdog_timer_disabled() {
     // This is safe because we're not storing the pointer anywhere and the

@@ -112,7 +112,7 @@ Logger Logger::create_wine_stderr() {
 }
 
 Logger Logger::create_exception_logger() {
-#ifdef __WINE__
+#if defined(__WINE__) || defined(VSTBRIDGE_PE_HOST)
     return Logger::create_wine_stderr();
 #else
     return Logger::create_from_environment("[error] ");

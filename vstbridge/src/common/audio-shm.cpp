@@ -19,9 +19,56 @@
 #include <iostream>
 
 #include "logging/common.h"
+#ifdef VSTBRIDGE_PE_HOST
+#include "../wine-host/unixlib/pe.h"
+#endif
 
 using namespace std::literals::string_literals;
 
+namespace {
+
+void log_memlock_warning() {
+    Logger logger = Logger::create_exception_logger();
+
+    logger.log("");
+    logger.log("ERROR: Could not map shared memory. This means that");
+    logger.log("       your user's memory locking limit has been");
+    logger.log("       reached. Check your distro's documentation or");
+    logger.log("       wiki for instructions on how to set up");
+    logger.log("       realtime privileges and memlock limits.");
+    logger.log("");
+}
+
+}  // namespace
+
+#ifdef VSTBRIDGE_PE_HOST
+// The PE plugin host maps the POSIX shared memory object through its unixlib.
+// The mapping lives in the same address space, so the plugin can use it
+// directly.
+AudioShmBuffer::AudioShmBuffer(const Config& config) : config_(config) {
+    unixlib::PathFdArgs args{.path = config.name.c_str()};
+    unixlib::call(unixlib::shm_open_fd, &args);
+    if (args.error) {
+        throw std::system_error(
+            std::error_code(args.error, std::generic_category()),
+            "Could not create shared memory object " + config_.name);
+    }
+
+    shm_fd_ = args.fd;
+    setup_mapping();
+}
+
+AudioShmBuffer::~AudioShmBuffer() noexcept {
+    // See below
+    if (!is_moved_) {
+        unixlib::ShmDestroyArgs args{.name = config_.name.c_str(),
+                                     .fd = shm_fd_,
+                                     .address = shm_bytes_,
+                                     .size = shm_size_};
+        unixlib::call(unixlib::shm_destroy, &args);
+    }
+}
+#else
 AudioShmBuffer::AudioShmBuffer(const Config& config)
     : config_(config),
       shm_fd_(shm_open(config.name.c_str(), O_RDWR | O_CREAT, 0600)) {
@@ -44,6 +91,7 @@ AudioShmBuffer::~AudioShmBuffer() noexcept {
         shm_unlink(config_.name.c_str());
     }
 }
+#endif
 
 AudioShmBuffer::AudioShmBuffer(AudioShmBuffer&& o) noexcept
     : config_(std::move(o.config_)),
@@ -74,6 +122,26 @@ void AudioShmBuffer::resize(const Config& new_config) {
     setup_mapping();
 }
 
+#ifdef VSTBRIDGE_PE_HOST
+void AudioShmBuffer::setup_mapping() {
+    unixlib::ShmMapArgs args{.fd = shm_fd_,
+                             .size = config_.size,
+                             .old_address = shm_bytes_,
+                             .old_size = shm_size_};
+    unixlib::call(unixlib::shm_map, &args);
+    if (args.unlocked) {
+        log_memlock_warning();
+    }
+    if (args.error) {
+        throw std::system_error(
+            std::error_code(args.error, std::generic_category()),
+            "Could not map shared memory");
+    }
+
+    shm_bytes_ = static_cast<uint8_t*>(args.address);
+    shm_size_ = config_.size;
+}
+#else
 void AudioShmBuffer::setup_mapping() {
     // Apparently you get a `Resource temporarily unavailable` when calling
     // `ftruncate()` with a size of 0 on shared memory
@@ -91,15 +159,7 @@ void AudioShmBuffer::setup_mapping() {
                 : mmap(nullptr, config_.size, PROT_READ | PROT_WRITE,
                        MAP_SHARED | MAP_LOCKED, shm_fd_, 0));
         if (shm_bytes_ == MAP_FAILED) {
-            Logger logger = Logger::create_exception_logger();
-
-            logger.log("");
-            logger.log("ERROR: Could not map shared memory. This means that");
-            logger.log("       your user's memory locking limit has been");
-            logger.log("       reached. Check your distro's documentation or");
-            logger.log("       wiki for instructions on how to set up");
-            logger.log("       realtime privileges and memlock limits.");
-            logger.log("");
+            log_memlock_warning();
 
             // Growing into a size that we cannot lock sounds like a super rare
             // edge case, but let's handle it anyways
@@ -119,3 +179,4 @@ void AudioShmBuffer::setup_mapping() {
 
     shm_size_ = config_.size;
 }
+#endif

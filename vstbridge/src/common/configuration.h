@@ -58,6 +58,7 @@ class Configuration {
      */
     Configuration() noexcept;
 
+#ifndef VSTBRIDGE_PE_HOST
     /**
      * Load the configuration for an instance of vstbridge from a configuration
      * file by matching the plugin's relative path to the glob patterns in that
@@ -70,6 +71,7 @@ class Configuration {
      */
     Configuration(const ghc::filesystem::path& config_path,
                   const ghc::filesystem::path& plugin_path);
+#endif
 
     /**
      * The name of the plugin group that should be used for the plugin this

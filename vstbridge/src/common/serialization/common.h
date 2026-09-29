@@ -92,7 +92,9 @@ struct HostRequest {
     PluginType plugin_type;
     std::string plugin_path;
     std::string endpoint_base_dir;
-    pid_t parent_pid;
+    // Not `pid_t`, which is 64-bit in the 64-bit PE plugin host (mingw-w64's
+    // `sys/types.h`)
+    int32_t parent_pid;
 
     template <typename S>
     void serialize(S& s) {
@@ -120,7 +122,8 @@ struct std::hash<HostRequest> {
  * from waiting indefinitely for the socket to be connected to.
  */
 struct HostResponse {
-    pid_t pid;
+    // See `HostRequest::parent_pid`
+    int32_t pid;
 
     template <typename S>
     void serialize(S& s) {

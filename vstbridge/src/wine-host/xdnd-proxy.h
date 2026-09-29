@@ -20,11 +20,7 @@
 
 #include "use-linux-asio.h"
 
-// Use the native version of xcb
-#pragma push_macro("_WIN32")
-#undef _WIN32
-#include <xcb/xcb.h>
-#pragma pop_macro("_WIN32")
+#include "xcb-native.h"
 
 #include <llvm/small-vector.h>
 #include <windows.h>

@@ -16,7 +16,9 @@
 
 #include "configuration.h"
 
+#ifndef VSTBRIDGE_PE_HOST
 #include <fnmatch.h>
+#endif
 #include <fstream>
 
 #include "toml++.h"
@@ -26,6 +28,9 @@ namespace fs = ghc::filesystem;
 
 Configuration::Configuration() noexcept {}
 
+// Configuration files are only parsed by the native plugin, and the PE plugin
+// host doesn't have `fnmatch()`
+#ifndef VSTBRIDGE_PE_HOST
 Configuration::Configuration(const fs::path& config_path,
                              const fs::path& plugin_path)
     : Configuration() {
@@ -152,6 +157,7 @@ Configuration::Configuration(const fs::path& config_path,
         break;
     }
 }
+#endif
 
 std::chrono::steady_clock::duration Configuration::event_loop_interval()
     const noexcept {

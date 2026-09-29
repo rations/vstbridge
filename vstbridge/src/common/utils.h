@@ -18,7 +18,9 @@
 
 #include <optional>
 
+#ifndef VSTBRIDGE_PE_HOST
 #include <sys/resource.h>
+#endif
 #include <ghc/filesystem.hpp>
 
 #define VSTBRIDGE_EXPORT __attribute__((visibility("default")))
@@ -110,6 +112,15 @@ std::optional<int> get_realtime_priority() noexcept;
 bool set_realtime_priority(bool sched_fifo, int priority = 5) noexcept;
 
 /**
+ * Set the calling thread's name as shown by Linux tools like `top` and `gdb`.
+ * Names longer than 15 characters are truncated.
+ */
+void set_current_thread_name(const char* name) noexcept;
+
+// The resource limits are only checked on the native plugin side
+#ifndef VSTBRIDGE_PE_HOST
+
+/**
  * Get the (soft) `RLIMIT_MEMLOCK` resource limit. If this is set to some low
  * value, then we'll print a warning during initialization because mapping
  * shared memory may fail. A value of `-1`/`RLIM_INFINITY` means that there is
@@ -129,6 +140,7 @@ std::optional<rlim_t> get_memlock_limit() noexcept;
  * time limit with some low value.
  */
 std::optional<rlim_t> get_rttime_limit() noexcept;
+#endif
 
 /**
  * Returns `true` if `VSTBRIDGE_NO_WATCHDOG` is set to `1`. In that case we will

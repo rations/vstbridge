@@ -86,7 +86,7 @@ class DefaultDataConverter {
      * specific opcodes to allow mutually recursive calling sequences.
      */
     virtual Vst2EventResult send_event(
-        asio::local::stream_protocol::socket& socket,
+        ipc::socket& socket,
         const Vst2Event& event,
         SerializationBufferBase& buffer) const;
 };
@@ -138,7 +138,7 @@ class Vst2EventHandler : public AdHocSocketHandler<Thread> {
      * @see Sockets::connect
      */
     Vst2EventHandler(asio::io_context& io_context,
-                     asio::local::stream_protocol::endpoint endpoint,
+                     ipc::endpoint endpoint,
                      bool listen)
         : AdHocSocketHandler<Thread>(io_context, endpoint, listen) {}
 
@@ -206,7 +206,7 @@ class Vst2EventHandler : public AdHocSocketHandler<Thread> {
         // that potentially need to have their responses handled on the same
         // calling thread (i.e. mutual recursion).
         const Vst2EventResult response =
-            this->send([&](asio::local::stream_protocol::socket& socket) {
+            this->send([&](ipc::socket& socket) {
                 return data_converter.send_event(socket, event,
                                                  serialization_buffer());
             });
@@ -250,7 +250,7 @@ class Vst2EventHandler : public AdHocSocketHandler<Thread> {
         // Reading, processing, and writing back event data from the sockets
         // works in the same way regardless of which socket we're using
         const auto process_event =
-            [&](asio::local::stream_protocol::socket& socket,
+            [&](ipc::socket& socket,
                 bool on_main_thread) {
                 SerializationBufferBase& buffer = serialization_buffer();
 
@@ -276,10 +276,10 @@ class Vst2EventHandler : public AdHocSocketHandler<Thread> {
         this->receive_multi(
             logging ? std::optional(std::ref(logging->first.logger_))
                     : std::nullopt,
-            [&](asio::local::stream_protocol::socket& socket) {
+            [&](ipc::socket& socket) {
                 process_event(socket, true);
             },
-            [&](asio::local::stream_protocol::socket& socket) {
+            [&](ipc::socket& socket) {
                 process_event(socket, false);
             });
     }

@@ -18,6 +18,9 @@
 
 #include <asio/read_until.hpp>
 
+// Generated inside of the build directory
+#include <config.h>
+
 #include "../common/utils.h"
 
 namespace fs = ghc::filesystem;
@@ -48,7 +51,13 @@ Process::Handle HostProcess::launch_host(
     child.arg(host_path.string() + ".so");
 #endif  // WINEDBG_LEGACY_ARGUMENT_QUOTING
 #else
-    Process child(host_path);
+    // A PE plugin host (aarch64) is a regular Windows program, while the
+    // Winelib host comes with a launcher script
+    Process child(vstbridge_host_is_pe ? plugin_info.wine_loader()
+                                       : host_path.string());
+    if constexpr (vstbridge_host_is_pe) {
+        child.arg(host_path.string());
+    }
 #endif  // WITH_WINEDBG
 
         // What's up with this indentation

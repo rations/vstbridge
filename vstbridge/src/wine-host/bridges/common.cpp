@@ -18,8 +18,29 @@
 
 #include <iostream>
 
+#ifdef VSTBRIDGE_PE_HOST
+#include "../unixlib/pe.h"
+#else
 #include "../../common/process.h"
+#endif
 #include "../editor.h"
+
+#ifdef VSTBRIDGE_PE_HOST
+namespace {
+
+/**
+ * `pid_running()` from `common/process.h`, run in the unixlib. The PE host
+ * can't see Linux processes through `/proc` itself.
+ */
+bool pid_running(pid_t pid) {
+    unixlib::ProcessArgs args{.pid = static_cast<int32_t>(pid)};
+    unixlib::call(unixlib::process_running, &args);
+
+    return args.running;
+}
+
+}  // namespace
+#endif
 
 /**
  * The maximum number of Win32 messages to handle per message loop. This is

@@ -22,7 +22,8 @@
 namespace fs = ghc::filesystem;
 
 LibArchitecture find_dll_architecture(const fs::path& plugin_path) {
-    std::ifstream file(plugin_path, std::ifstream::binary | std::ifstream::in);
+    std::ifstream file(plugin_path.string(),
+                       std::ifstream::binary | std::ifstream::in);
 
     // The linker will place the offset where the PE signature is placed at the
     // end of the MS-DOS stub, at offset 0x3c
