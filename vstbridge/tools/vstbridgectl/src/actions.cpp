@@ -576,7 +576,7 @@ void do_sync(Config& config, const SyncOptions& opts) {
     if (opts.no_verify || config.no_verify)
         return;
 
-    verify_path_setup();
+    verify_path_setup(config);
     verify_wine_setup(config);
     verify_external_dependencies();
 }

@@ -372,23 +372,25 @@ jobs:
 
       # vstbridgectl must find the system-wide install, and sync runs the plugin host through
       # Wine. That creates ~/.wine, which must get Mono from wine-fex-mono without a download.
-      # The job runs as root, but GitHub's /github/home belongs to the runner's user, and Wine
-      # refuses to create a prefix in a home it doesn't own, so the test gets its own home.
+      # Wine must not run as root, and on Pivuan it never does: it runs as the logged-in user,
+      # in their own ~/.wine. So this runs as a normal user with its own home, like a Pivuan user.
       # sync only warns when the host doesn't run, so its output is checked too.
-      - name: vstbridgectl sync
+      - name: vstbridgectl sync, as a normal user
         shell: bash
         run: |
-          set -euxo pipefail
-          export HOME="$RUNNER_TEMP/home"
-          mkdir -p "$HOME"
+          set -euo pipefail
+          useradd --create-home pivuan
+          cat > /tmp/sync-check.sh <<'EOF'
           wine --version
           vstbridgectl status
-          mkdir -p /tmp/plugins
-          vstbridgectl add /tmp/plugins
-          vstbridgectl sync 2>&1 | tee "$RUNNER_TEMP/sync.log"
-          if grep -q "Could not run" "$RUNNER_TEMP/sync.log"; then
+          mkdir -p "$HOME/plugins"
+          vstbridgectl add "$HOME/plugins"
+          vstbridgectl sync 2>&1 | tee "$HOME/sync.log"
+          if grep -q "Could not run" "$HOME/sync.log"; then
             echo "::error::vstbridgectl sync could not run the plugin host"
             exit 1
           fi
           test -d "$HOME/.wine/drive_c/windows/mono"
           wineserver -k || true
+          EOF
+          runuser -u pivuan -- env HOME=/home/pivuan bash -euxo pipefail /tmp/sync-check.sh
