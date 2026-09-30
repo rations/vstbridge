@@ -348,15 +348,24 @@ jobs:
 
       # vstbridgectl must find the system-wide install, and sync runs the plugin host through
       # Wine. That creates ~/.wine, which must get Mono from wine-fex-mono without a download.
+      # The job runs as root, but GitHub's /github/home belongs to the runner's user, and Wine
+      # refuses to create a prefix in a home it doesn't own, so the test gets its own home.
+      # sync only warns when the host doesn't run, so its output is checked too.
       - name: vstbridgectl sync
         shell: bash
         run: |
           set -euxo pipefail
+          export HOME="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
           wine --version
           vstbridgectl status
           mkdir -p /tmp/plugins
           vstbridgectl add /tmp/plugins
-          vstbridgectl sync
+          vstbridgectl sync 2>&1 | tee "$RUNNER_TEMP/sync.log"
+          if grep -q "Could not run" "$RUNNER_TEMP/sync.log"; then
+            echo "::error::vstbridgectl sync could not run the plugin host"
+            exit 1
+          fi
           test -d "$HOME/.wine/drive_c/windows/mono"
           wineserver -k || true
 
