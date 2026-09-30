@@ -29,7 +29,6 @@
 #endif
 #include <llvm/small-vector.h>
 #include <asio/io_context.hpp>
-#include <asio/local/stream_protocol.hpp>
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 #include <ghc/filesystem.hpp>
@@ -37,6 +36,7 @@
 #include "../bitsery/traits/small-vector.h"
 #include "../logging/common.h"
 #include "../utils.h"
+#include "ipc.h"
 
 // Our input and output adapters for binary serialization always expect the data
 // to be encoded in little endian format. This should not make any difference
@@ -302,7 +302,7 @@ class Sockets {
             //       we'll have it!
             const ghc::filesystem::path temp_dir = get_temporary_directory();
             if (base_dir_.string().starts_with(temp_dir.string())) {
-                ghc::filesystem::remove_all(base_dir_);
+                ipc::remove_directory(base_dir_.string());
             } else {
                 Logger logger = Logger::create_exception_logger();
 
@@ -367,12 +367,11 @@ class SocketHandler {
      * @see Sockets::connect
      */
     SocketHandler(asio::io_context& io_context,
-                  asio::local::stream_protocol::endpoint endpoint,
+                  ipc::endpoint endpoint,
                   bool listen)
         : endpoint_(endpoint), socket_(io_context) {
         if (listen) {
-            ghc::filesystem::create_directories(
-                ghc::filesystem::path(endpoint.path()).parent_path());
+            ipc::create_endpoint_directory(endpoint);
             acceptor_.emplace(io_context, endpoint);
         }
     }
@@ -397,7 +396,7 @@ class SocketHandler {
     void close() {
         // The shutdown can fail when the socket is already closed
         std::error_code err;
-        socket_.shutdown(asio::local::stream_protocol::socket::shutdown_both,
+        socket_.shutdown(ipc::socket::shutdown_both,
                          err);
         socket_.close();
     }
@@ -517,14 +516,14 @@ class SocketHandler {
     }
 
    private:
-    asio::local::stream_protocol::endpoint endpoint_;
-    asio::local::stream_protocol::socket socket_;
+    ipc::endpoint endpoint_;
+    ipc::socket socket_;
 
     /**
      * Will be used in `connect()` on the listening side to establish the
      * connection.
      */
-    std::optional<asio::local::stream_protocol::acceptor> acceptor_;
+    std::optional<ipc::acceptor> acceptor_;
 };
 
 /**
@@ -568,12 +567,11 @@ class AdHocSocketHandler {
      * @see Sockets::connect
      */
     AdHocSocketHandler(asio::io_context& io_context,
-                       asio::local::stream_protocol::endpoint endpoint,
+                       ipc::endpoint endpoint,
                        bool listen)
         : io_context_(io_context), endpoint_(endpoint), socket_(io_context) {
         if (listen) {
-            ghc::filesystem::create_directories(
-                ghc::filesystem::path(endpoint.path()).parent_path());
+            ipc::create_endpoint_directory(endpoint);
             acceptor_.emplace(io_context, endpoint);
         }
     }
@@ -593,7 +591,7 @@ class AdHocSocketHandler {
             // potentially on the other side of the connection in the case
             // where we're handling `plugin_host_callback_` VST2 events
             acceptor_.reset();
-            ghc::filesystem::remove(endpoint_.path());
+            ipc::remove_endpoint(endpoint_);
         } else {
             socket_.connect(endpoint_);
         }
@@ -606,7 +604,7 @@ class AdHocSocketHandler {
     void close() {
         // The shutdown can fail when the socket is already closed
         std::error_code err;
-        socket_.shutdown(asio::local::stream_protocol::socket::shutdown_both,
+        socket_.shutdown(ipc::socket::shutdown_both,
                          err);
         socket_.close();
 
@@ -632,15 +630,15 @@ class AdHocSocketHandler {
      *   socket. This is either the primary `socket`, or a new ad hock socket if
      *   this function is currently being called from another thread.
      */
-    template <std::invocable<asio::local::stream_protocol::socket&> F>
-    std::invoke_result_t<F, asio::local::stream_protocol::socket&> send(
+    template <std::invocable<ipc::socket&> F>
+    std::invoke_result_t<F, ipc::socket&> send(
         F&& callback) {
         // A bit of template and constexpr nastiness to allow us to either
         // return a value from the callback (for when writing the response to a
         // new object) or to return void (when we deserialize into an existing
         // object)
         constexpr bool returns_void = std::is_void_v<
-            std::invoke_result_t<F, asio::local::stream_protocol::socket&>>;
+            std::invoke_result_t<F, ipc::socket&>>;
 
         // XXX: Maybe at some point we should benchmark how often this
         //      ad hoc socket spawning mechanism gets used. If some hosts
@@ -662,7 +660,7 @@ class AdHocSocketHandler {
             }
         } else {
             try {
-                asio::local::stream_protocol::socket secondary_socket(
+                ipc::socket secondary_socket(
                     io_context_);
                 secondary_socket.connect(endpoint_);
 
@@ -716,8 +714,8 @@ class AdHocSocketHandler {
      *   same thing as `primary_callback`, but secondary sockets may need some
      *   different handling.
      */
-    template <std::invocable<asio::local::stream_protocol::socket&> F,
-              std::invocable<asio::local::stream_protocol::socket&> G>
+    template <std::invocable<ipc::socket&> F,
+              std::invocable<ipc::socket&> G>
     void receive_multi(std::optional<std::reference_wrapper<Logger>> logger,
                        F&& primary_callback,
                        G&& secondary_callback) {
@@ -746,7 +744,7 @@ class AdHocSocketHandler {
         std::mutex active_secondary_requests_mutex{};
         accept_requests(
             *acceptor_, logger,
-            [&](asio::local::stream_protocol::socket secondary_socket) {
+            [&](ipc::socket secondary_socket) {
                 const size_t request_id = next_request_id.fetch_add(1);
 
                 // We have to make sure to keep moving these sockets into the
@@ -754,7 +752,7 @@ class AdHocSocketHandler {
                 std::lock_guard lock(active_secondary_requests_mutex);
                 active_secondary_requests[request_id] = Thread(
                     [&, request_id](
-                        asio::local::stream_protocol::socket secondary_socket) {
+                        ipc::socket secondary_socket) {
                         secondary_callback(secondary_socket);
 
                         // When we have processed this request, we'll join the
@@ -773,7 +771,7 @@ class AdHocSocketHandler {
             });
 
         Thread secondary_requests_handler([&]() {
-            pthread_setname_np(pthread_self(), "adhoc-acceptor");
+            set_current_thread_name("adhoc-acceptor");
 
             // Any secondary threads should not be realtime
             set_realtime_priority(false);
@@ -809,7 +807,7 @@ class AdHocSocketHandler {
      *
      * @overload
      */
-    template <std::invocable<asio::local::stream_protocol::socket&> F>
+    template <std::invocable<ipc::socket&> F>
     void receive_multi(std::optional<std::reference_wrapper<Logger>> logger,
                        F&& callback) {
         receive_multi(logger, callback, std::forward<F>(callback));
@@ -826,14 +824,14 @@ class AdHocSocketHandler {
      *   should only be passed on the plugin side.
      * @param callback A function that handles the new socket connection.
      */
-    template <std::invocable<asio::local::stream_protocol::socket> F>
-    void accept_requests(asio::local::stream_protocol::acceptor& acceptor,
+    template <std::invocable<ipc::socket> F>
+    void accept_requests(ipc::acceptor& acceptor,
                          std::optional<std::reference_wrapper<Logger>> logger,
                          F&& callback) {
         acceptor.async_accept(
             [&, logger, callback](
                 const std::error_code& error,
-                asio::local::stream_protocol::socket secondary_socket) {
+                ipc::socket secondary_socket) {
                 if (error) {
                     // On the Wine side it's expected that the primary socket
                     // connection will be dropped during shutdown, so we can
@@ -861,8 +859,8 @@ class AdHocSocketHandler {
      */
     asio::io_context& io_context_;
 
-    asio::local::stream_protocol::endpoint endpoint_;
-    asio::local::stream_protocol::socket socket_;
+    ipc::endpoint endpoint_;
+    ipc::socket socket_;
 
     /**
      * This acceptor will be used once synchronously on the listening side
@@ -874,7 +872,7 @@ class AdHocSocketHandler {
      * sockets), but all additional incoming connections of course have to be
      * listened for on the plugin side.
      */
-    std::optional<asio::local::stream_protocol::acceptor> acceptor_;
+    std::optional<ipc::acceptor> acceptor_;
 
     /**
      * After the socket gets closed, we do some cleanup at the end of
@@ -938,7 +936,7 @@ class TypedMessageHandler : public AdHocSocketHandler<Thread> {
      * @see Sockets::connect
      */
     TypedMessageHandler(asio::io_context& io_context,
-                        asio::local::stream_protocol::endpoint endpoint,
+                        ipc::endpoint endpoint,
                         bool listen)
         : AdHocSocketHandler<Thread>(io_context, endpoint, listen) {}
 
@@ -1029,7 +1027,7 @@ class TypedMessageHandler : public AdHocSocketHandler<Thread> {
         // messages from arriving out of order. `AdHocSocketHandler::send()`
         // will either use a long-living primary socket, or if that's currently
         // in use it will spawn a new socket for us.
-        this->send([&](asio::local::stream_protocol::socket& socket) {
+        this->send([&](ipc::socket& socket) {
             write_object(socket, Request(object), buffer);
             read_object<TResponse>(socket, response_object, buffer);
         });
@@ -1098,7 +1096,7 @@ class TypedMessageHandler : public AdHocSocketHandler<Thread> {
         // we receive works in the same way regardless of which socket we're
         // using
         const auto process_message =
-            [&](asio::local::stream_protocol::socket& socket) {
+            [&](ipc::socket& socket) {
                 // The persistent buffer is only used when the
                 // `persistent_buffers` template value is enabled, but we'll
                 // always use the thread local persistent object. Because of

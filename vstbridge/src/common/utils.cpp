@@ -18,8 +18,17 @@
 
 #include <stdlib.h>
 
+#ifdef VSTBRIDGE_PE_HOST
+#include "../wine-host/unixlib/pe.h"
+#else
+#include <pthread.h>
 #include <sched.h>
+#endif
+#if defined(__aarch64__) || defined(__arm64ec__)
+#include <cstdint>
+#else
 #include <xmmintrin.h>
+#endif
 
 namespace fs = ghc::filesystem;
 
@@ -51,6 +60,32 @@ fs::path get_temporary_directory() {
     }
 }
 
+#ifdef VSTBRIDGE_PE_HOST
+// The PE plugin host can't call these Linux functions itself, so they're run
+// on the calling thread through the unixlib
+std::optional<int> get_realtime_priority() noexcept {
+    unixlib::RealtimePriorityArgs args{};
+    unixlib::call(unixlib::sched_get_realtime_priority, &args);
+    if (args.sched_fifo) {
+        return args.priority;
+    } else {
+        return std::nullopt;
+    }
+}
+
+bool set_realtime_priority(bool sched_fifo, int priority) noexcept {
+    unixlib::RealtimePriorityArgs args{.sched_fifo = sched_fifo,
+                                       .priority = priority};
+    unixlib::call(unixlib::sched_set_realtime_priority, &args);
+
+    return args.success;
+}
+
+void set_current_thread_name(const char* name) noexcept {
+    unixlib::ThreadNameArgs args{.name = name};
+    unixlib::call(unixlib::thread_set_name, &args);
+}
+#else
 std::optional<int> get_realtime_priority() noexcept {
     sched_param current_params{};
     if (sched_getparam(0, &current_params) == 0 &&
@@ -84,6 +119,11 @@ std::optional<rlim_t> get_rttime_limit() noexcept {
         return std::nullopt;
     }
 }
+
+void set_current_thread_name(const char* name) noexcept {
+    pthread_setname_np(pthread_self(), name);
+}
+#endif
 
 bool is_watchdog_timer_disabled() {
     // This is safe because we're not storing the pointer anywhere and the
@@ -216,6 +256,35 @@ std::string url_encode_path(std::string path) {
     return escaped;
 }
 
+#if defined(__aarch64__) || defined(__arm64ec__)
+// On ARM the flush-to-zero flag is the FZ bit in the FPCR register. Under
+// ARM64EC, emulated x86_64 code sees this bit as MXCSR's FTZ flag.
+namespace {
+constexpr uint64_t fpcr_fz_bit = 1ull << 24;
+
+uint64_t get_fpcr() noexcept {
+    uint64_t fpcr;
+    asm volatile("mrs %0, fpcr" : "=r"(fpcr));
+    return fpcr;
+}
+
+void set_fpcr(uint64_t fpcr) noexcept {
+    asm volatile("msr fpcr, %0" : : "r"(fpcr));
+}
+}  // namespace
+
+ScopedFlushToZero::ScopedFlushToZero() noexcept {
+    const uint64_t fpcr = get_fpcr();
+    old_ftz_mode_ = static_cast<unsigned int>(fpcr & fpcr_fz_bit);
+    set_fpcr(fpcr | fpcr_fz_bit);
+}
+
+ScopedFlushToZero::~ScopedFlushToZero() noexcept {
+    if (old_ftz_mode_) {
+        set_fpcr((get_fpcr() & ~fpcr_fz_bit) | *old_ftz_mode_);
+    }
+}
+#else
 ScopedFlushToZero::ScopedFlushToZero() noexcept {
     old_ftz_mode_ = _MM_GET_FLUSH_ZERO_MODE();
     _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
@@ -226,6 +295,7 @@ ScopedFlushToZero::~ScopedFlushToZero() noexcept {
         _MM_SET_FLUSH_ZERO_MODE(*old_ftz_mode_);
     }
 }
+#endif
 
 ScopedFlushToZero::ScopedFlushToZero(ScopedFlushToZero&& o) noexcept
     : old_ftz_mode_(std::move(o.old_ftz_mode_)) {

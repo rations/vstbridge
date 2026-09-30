@@ -44,7 +44,7 @@ vst3_sdk_native = static_library(
 )
 
 # We need a separate host SDK dependency for our Wine plugin host applications
-if is_64bit_system
+if with_64bit_host
   vst3_base_wine_64bit = static_library(
     'vst3_base_wine_64bit',
     vst3.get_variable('base_sources'),
@@ -67,6 +67,37 @@ if is_64bit_system
     native : false,
     link_with : [vst3_base_wine_64bit, vst3_pluginterfaces_wine_64bit],
     cpp_args : vst3_compiler_options + wine_64bit_compiler_options + ['-Wno-multichar'],
+    include_directories : vst3_include_dir,
+    override_options : ['warning_level=0'],
+  )
+endif
+
+# The PE plugin host is built with a MinGW cross compiler
+if with_pe_host
+  vst3_pe_compiler_options = pe_host_compiler_options + vst3.get_variable('compiler_options')
+
+  vst3_base_pe = static_library(
+    'vst3_base_pe',
+    vst3.get_variable('base_sources'),
+    native : false,
+    cpp_args : vst3_pe_compiler_options + ['-Wno-cpp'],
+    include_directories : vst3_include_dir,
+    override_options : ['warning_level=0'],
+  )
+  vst3_pluginterfaces_pe = static_library(
+    'vst3_pluginterfaces_pe',
+    vst3.get_variable('pluginterfaces_sources'),
+    native : false,
+    cpp_args : vst3_pe_compiler_options,
+    include_directories : vst3_include_dir,
+    override_options : ['warning_level=0'],
+  )
+  vst3_sdk_hosting_pe = static_library(
+    'vst3_sdk_hosting_pe',
+    vst3.get_variable('sdk_common_sources') + vst3.get_variable('sdk_hosting_sources'),
+    native : false,
+    link_with : [vst3_base_pe, vst3_pluginterfaces_pe],
+    cpp_args : vst3_pe_compiler_options + ['-Wno-multichar'],
     include_directories : vst3_include_dir,
     override_options : ['warning_level=0'],
   )
@@ -111,7 +142,7 @@ vst3_sdk_native_dep = declare_dependency(
   compile_args : vst3_compiler_options,
 )
 
-if is_64bit_system
+if with_64bit_host
   vst3_sdk_hosting_wine_64bit_dep = declare_dependency(
     link_with : vst3_sdk_hosting_wine_64bit,
     include_directories : vst3_include_dir,
@@ -119,6 +150,14 @@ if is_64bit_system
     # alternative would be patching every location in the SDK where they include
     # `windows.h`
     compile_args : vst3_compiler_options + wine_64bit_compiler_options,
+  )
+endif
+
+if with_pe_host
+  vst3_sdk_hosting_pe_dep = declare_dependency(
+    link_with : vst3_sdk_hosting_pe,
+    include_directories : vst3_include_dir,
+    compile_args : vst3_pe_compiler_options,
   )
 endif
 

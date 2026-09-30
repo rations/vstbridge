@@ -18,9 +18,16 @@
 
 #include <iostream>
 #include <numeric>
+#include <thread>
 
 #include "../common/notifications.h"
 #include "editor.h"
+
+#ifdef VSTBRIDGE_PE_HOST
+// Wine's kernel32 extension, not in mingw-w64's headers
+#include "unixlib/pe.h"
+using unixlib::wine_get_unix_file_name;
+#endif
 
 using namespace std::literals::chrono_literals;
 

@@ -31,7 +31,7 @@
 
 // Calling convention for Wine interoperability, not part of the original
 // headerfrom the Audacity proejct
-#ifndef __WINE__
+#if !defined(__WINE__) && !defined(_WIN32)
 #define __cdecl
 #endif
 

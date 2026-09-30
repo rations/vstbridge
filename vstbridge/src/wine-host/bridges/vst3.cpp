@@ -1552,7 +1552,7 @@ size_t Vst3Bridge::register_object_instance(
             //      useful than no thread names.
             const std::string thread_name =
                 "audio-" + std::to_string(instance_id);
-            pthread_setname_np(pthread_self(), thread_name.c_str());
+            set_current_thread_name(thread_name.c_str());
 
             sockets_.add_audio_processor_and_listen(
                 instance_id, socket_listening_latch,

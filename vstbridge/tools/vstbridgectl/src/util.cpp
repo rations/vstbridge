@@ -58,7 +58,9 @@ LibArchitecture get_elf_architecture(const fs::path& path) {
 
     if (machine == 0x03)
         return LibArchitecture::Lib32;
-    if (machine == 0x3E)
+    if (machine == 0x3E)   // EM_X86_64
+        return LibArchitecture::Lib64;
+    if (machine == 0xB7)   // EM_AARCH64
         return LibArchitecture::Lib64;
 
     throw std::runtime_error("'" + path.string() + "' is not a recognized ELF machine ISA");
@@ -378,7 +380,7 @@ bool verify_path_setup() {
 
 void verify_wine_setup(Config& config) {
     const char* wine_loader = std::getenv("WINELOADER");
-    std::string wine_bin = wine_loader ? wine_loader : "wine";
+    std::string wine_bin = wine_loader ? wine_loader : VSTBRIDGECTL_DEFAULT_WINE_LOADER;
 
     // Unset WAYLAND_DISPLAY like vstbridge itself does
     unsetenv("WAYLAND_DISPLAY");
@@ -405,7 +407,12 @@ void verify_wine_setup(Config& config) {
         throw std::runtime_error("Could not locate '" + std::string(VSTBRIDGE_HOST_EXE_NAME) +
                                  ".so'");
 
-    int64_t host_hash = hash_file(*exe_so);
+    // A PE host's executable changes with every build, while its unixlib may
+    // not
+    const bool host_is_pe = files.vstbridge_host_exe_so && files.vstbridge_host_is_pe;
+    int64_t host_hash = hash_file(host_is_pe && files.vstbridge_host_exe
+                                      ? *files.vstbridge_host_exe
+                                      : *exe_so);
 
     KnownConfig current{wine_out, host_hash};
     if (config.last_known_config && config.last_known_config->wine_version == current.wine_version &&
@@ -428,7 +435,12 @@ void verify_wine_setup(Config& config) {
 
     std::string stderr_out;
     try {
-        stderr_out = run_command_output(host_path.string(), {});
+        // A PE plugin host has to be run through Wine. The 32-bit host is
+        // always a Winelib host.
+        if (host_is_pe && host_path == files.vstbridge_host_exe)
+            stderr_out = run_command_output(wine_bin, {host_path.string()});
+        else
+            stderr_out = run_command_output(host_path.string(), {});
     } catch (...) {
         throw std::runtime_error("Could not run '" + host_path.string() + "'");
     }

@@ -26,6 +26,19 @@ with_clap = get_option('clap')
 with_system_asio = get_option('system-asio')
 with_winedbg = get_option('winedbg')
 with_vst3 = get_option('vst3')
+with_wine_host = get_option('wine-host') == 'winelib'
+# The Winelib hosts can only be built on x86 and x86_64. On aarch64 the
+# plugin host is an ARM64EC PE executable instead, as Wine does not support
+# Winelib ELF executables there. It uses a native unixlib for the Linux APIs.
+with_pe_host = get_option('wine-host') == 'pe'
+with_64bit_host = with_wine_host and is_64bit_system
+
+if with_wine_host and build_machine.cpu_family() not in ['x86', 'x86_64']
+  error('Winelib plugin hosts can only be built on x86 and x86_64. Use \'-Dwine-host=none\' to only build the native plugin libraries.')
+endif
+if with_bitbridge and not with_wine_host
+  error('The \'bitbridge\' option requires \'-Dwine-host=winelib\'.')
+endif
 
 # Cookies can't be stored correctly when the native host is 32-bit and the
 # bridged plugin is 64-bit
@@ -56,16 +69,19 @@ host_name_32bit = 'vstbridge-host-32'
 compiler_options = [
   '-fvisibility=hidden',
   '-fvisibility-inlines-hidden',
-  # We use an intrinsic to force flush-to-zero. SSE2 is always enabled in x86_64
-  # CPUs, but when we're compiling the 32-bit bitbridge we need to manually add
-  # this flag.
-  '-msse2',
   # FIXME: Bitsery relies on the definitions from `<cstdint>`, which is no
   #        longer included transitively with GCC 13. This should be removed once
   #        bitsery is updated to support GCC 13.
   '-include',
   'cstdint',
 ]
+
+# We use an intrinsic to force flush-to-zero. SSE2 is always enabled in x86_64
+# CPUs, but when we're compiling the 32-bit bitbridge we need to manually add
+# this flag. On ARM the FPCR register is used instead.
+if build_machine.cpu_family() in ['x86', 'x86_64']
+  compiler_options += '-msse2'
+endif
 
 chainloader_compiler_options = [
   # We use our process library for sending notifications from the chainloaders,
@@ -107,6 +123,7 @@ wine_compiler_options = [
 wine_32bit_compiler_options = wine_compiler_options + ['-m32', '-malign-double']
 wine_64bit_compiler_options = wine_compiler_options + ['-m64']
 
+
 # Enable addition assertions on the STL containers during debug builds. Meson
 # has a `cpp_debugstl` option, but it's nicer having this automatically tied to
 # debug builds.
@@ -132,6 +149,29 @@ if with_vst3
   compiler_options += '-DWITH_VST3'
 endif
 
+# The PE plugin host is compiled by a MinGW cross compiler, so it gets the
+# regular Windows headers and Asio's Windows backend. `-msse2` is left out since
+# that's for x86 build machines, and the host may be ARM64EC.
+pe_host_compiler_options = [
+  '-DVSTBRIDGE_PE_HOST',
+  '-DNOMINMAX',
+  '-D_WIN32_WINNT=0x0A00',
+  # For `localtime_r()` in mingw-w64's `<time.h>`
+  '-D_POSIX_THREAD_SAFE_FUNCTIONS',
+  # The unixlib argument structs are partially initialized on purpose, the
+  # rest is zeroed
+  '-Wno-missing-designated-field-initializers',
+  # libc++ no longer includes <exception> transitively, which Asio 1.28 and the
+  # VST3 SDK rely on
+  '-include',
+  'exception',
+]
+foreach option : compiler_options
+  if option != '-msse2'
+    pe_host_compiler_options += option
+  endif
+endforeach
+
 #
 # Wine checks
 #
@@ -142,8 +182,15 @@ endif
 winelib_check = '''#ifndef __WINE__
 #error 1
 #endif'''
-if not meson.get_compiler('cpp').compiles(winelib_check)
+if with_wine_host and not meson.get_compiler('cpp').compiles(winelib_check)
   error('You need to set up a cross compiler, check the README for compilation instructions.')
+endif
+
+pe_check = '''#if !defined(_WIN32) || defined(__WINE__)
+#error 1
+#endif'''
+if with_pe_host and not meson.get_compiler('cpp', native : false).compiles(pe_check)
+  error('The PE plugin host needs a MinGW cross compiler, for instance with \'--cross-file cross-arm64ec.conf\'.')
 endif
 
 # Wine versions after Wine 5.6 and before 6.0 require a `__cdecl` calling
@@ -159,7 +206,9 @@ wine_version = run_command(
   'sh', '-c', '''wine --version | grep --only-matching -E '[0-9]+\.[0-9]+(-?rc[0-9]+)?' | head -n1''',
   check : false
 )
-if wine_version.returncode() == 0
+if not with_wine_host
+  message('Not building the Wine plugin host, skipping the Wine version checks')
+elif wine_version.returncode() == 0
   wine_version = wine_version.stdout()
   message('Targetting Wine @0@'.format(wine_version))
 
@@ -220,11 +269,25 @@ include_dir = include_directories('src/include', is_system : true)
 # to properly do this, please let me know!
 winegcc = meson.get_compiler('cpp', native : false)
 
-if is_64bit_system
+if with_64bit_host
   xcb_64bit_dep = dependency('xcb')
 endif
 if with_32bit_libraries or with_bitbridge
   xcb_32bit_dep = winegcc.find_library('xcb')
+endif
+if with_pe_host
+  # The unixlib links to libxcb. The PE host compiles against the same headers
+  # for its xcb thunks, but the system include directory can't be added to a
+  # MinGW compiler's search path as a whole, so it gets a directory containing
+  # just a link to the xcb headers.
+  xcb_native_dep = dependency('xcb', native : true)
+  pe_xcb_include_dir = meson.current_build_dir() / 'pe-include'
+  run_command(
+    'sh', '-c', 'mkdir -p "$1" && ln -sfn "$2" "$1/xcb"', 'sh',
+    pe_xcb_include_dir,
+    xcb_native_dep.get_variable(pkgconfig : 'includedir') / 'xcb',
+    check : true,
+  )
 endif
 
 # These are all headers-only libraries, and thus won't require separate 32-bit
@@ -249,6 +312,11 @@ if with_system_asio
   asio_dep = declare_dependency()
 else
   asio_dep = dependency('asio', version : '>=1.28.0')
+endif
+# A system copy of Asio lives in the system include directory, which a MinGW
+# cross compiler can't use, so the PE plugin host always uses the subproject
+if with_pe_host
+  asio_pe_dep = subproject('asio').get_variable('asio_dep')
 endif
 
 if meson.version().version_compare('>=0.60')
@@ -385,10 +453,10 @@ if with_vst3
   )
 endif
 
-if is_64bit_system
+if with_64bit_host
   executable(
     host_name_64bit,
-    host_sources,
+    host_winelib_sources,
     native : false,
     include_directories : include_dir,
     dependencies : host_64bit_deps,
@@ -397,10 +465,36 @@ if is_64bit_system
   )
 endif
 
+if with_pe_host
+  executable(
+    host_name_64bit,
+    host_pe_sources,
+    native : false,
+    include_directories : [include_dir, include_directories('src/wine-host/unixlib/include')],
+    dependencies : host_pe_deps,
+    # `<windows.h>` would otherwise include the old `<winsock.h>`, which Asio's
+    # Windows backend refuses to be combined with. This can't be used for the
+    # VST3 SDK, which defines `UNICODE` before including `<windows.h>`.
+    cpp_args : pe_host_compiler_options + ['-include', 'winsock2.h', '-I' + pe_xcb_include_dir],
+    # Static linking so libc++ and friends don't have to be installed as DLLs
+    link_args : ['-static', '-lws2_32', '-lmswsock', '-lole32', '-lshell32', '-luuid'],
+  )
+  # Loaded by the host through `MemoryWineLoadUnixLibByName`, see
+  # `src/wine-host/unixlib/calls.h`
+  shared_library(
+    host_name_64bit + '-unixlib',
+    unixlib_sources,
+    native : true,
+    name_prefix : '',
+    dependencies : [xcb_native_dep],
+    cpp_args : compiler_options,
+  )
+endif
+
 if with_bitbridge
   executable(
     host_name_32bit,
-    host_sources,
+    host_winelib_sources,
     native : false,
     include_directories : include_dir,
     dependencies : host_32bit_deps,

@@ -6,6 +6,11 @@ CXX      ?= g++
 CXXFLAGS := -std=c++20 -O2 -Wall -Wextra $(CXXFLAGS)
 LDFLAGS  := -ldl -lpthread $(LDFLAGS)
 
+# The Wine binary to use when WINELOADER is not set. Should match vstbridge's
+# `wine-loader` build option, e.g. /opt/vstbridge/wine/bin/wine on aarch64.
+WINE_LOADER ?= wine
+CXXFLAGS += -DVSTBRIDGECTL_DEFAULT_WINE_LOADER='"$(WINE_LOADER)"'
+
 BUILD_DIR := build
 DEP_DIR   := deps
 
@@ -71,7 +76,7 @@ deps: $(DEP_DIR)/cli11/.git $(DEP_DIR)/nlohmann/.git $(DEP_DIR)/tomlplusplus/.gi
 
 # ─── Build rules ──────────────────────────────────────────────────────────────
 
-$(BUILD_DIR)/%.o: src/%.cpp | $(BUILD_DIR) $(BUILD_DIR)/actions
+$(BUILD_DIR)/%.o: src/%.cpp | $(BUILD_DIR) $(BUILD_DIR)/actions deps
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/actions/%.o: src/actions/%.cpp | $(BUILD_DIR)/actions deps

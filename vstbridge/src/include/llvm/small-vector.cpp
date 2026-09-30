@@ -15,6 +15,8 @@
 
 #include "small-vector.h"
 
+#include <string>
+
 #define LLVM_ENABLE_EXCEPTIONS
 
 #include <cstdint>

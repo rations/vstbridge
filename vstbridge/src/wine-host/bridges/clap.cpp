@@ -24,6 +24,10 @@
 // Generated inside of the build directory
 #include <version.h>
 
+#ifdef VSTBRIDGE_PE_HOST
+#include "../unixlib/pe.h"
+#endif
+
 namespace fs = ghc::filesystem;
 
 ClapPluginExtensions::ClapPluginExtensions(const clap_plugin& plugin) noexcept
@@ -119,6 +123,13 @@ ClapBridge::ClapBridge(MainContext& main_context,
     // unexpected behavior. Wine can convert these paths for us, but we'd get a
     // `WCHAR*` back which we must first convert back to UTF-8.
     bool init_success;
+#ifdef VSTBRIDGE_PE_HOST
+    // The PE host already converted the path to a DOS path in the ANSI code
+    // page in `host.cpp`, and CLAP wants UTF-8
+    assert(entry_->init);
+    init_success =
+        entry_->init(unixlib::ansi_to_utf8(plugin_dll_path).c_str());
+#else
     WCHAR* dos_plugin_dll_path(wine_get_dos_file_name(plugin_dll_path.c_str()));
     if (dos_plugin_dll_path) {
         static_assert(sizeof(WCHAR) == sizeof(char16_t));
@@ -140,6 +151,7 @@ ClapBridge::ClapBridge(MainContext& main_context,
         // This should never be hit, but just in case
         init_success = entry_->init(plugin_dll_path.c_str());
     }
+#endif
 
     if (!init_success) {
         // `clap_entry->deinit()` is normally called when `entry_` is dropped,
@@ -1070,7 +1082,7 @@ void ClapBridge::register_plugin_instance(
         //      deal probably, since duplicate thread names are still more
         //      useful than no thread names.
         const std::string thread_name = "audio-" + std::to_string(instance_id);
-        pthread_setname_np(pthread_self(), thread_name.c_str());
+        set_current_thread_name(thread_name.c_str());
 
         sockets_.add_audio_thread_and_listen_control(
             instance_id, socket_listening_latch,

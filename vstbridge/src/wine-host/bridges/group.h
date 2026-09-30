@@ -21,8 +21,11 @@
 
 #include "../use-linux-asio.h"
 
-#include <asio/local/stream_protocol.hpp>
+#ifndef VSTBRIDGE_PE_HOST
 #include <asio/posix/stream_descriptor.hpp>
+#endif
+
+#include "../../common/communication/ipc.h"
 
 #include "../common/logging/common.h"
 #include "../utils.h"
@@ -37,7 +40,12 @@
  * a log file. Since the host application is run independently of the vstbridge
  * instance that spawned it, this can't simply be done by the caller like we're
  * doing for Wine output in individually hosted plugins.
+ *
+ * Not used in the PE plugin host. There this would only capture output written
+ * directly to the Unix file descriptors, since Wine's standard handles hold
+ * their own copies of the original file descriptors.
  */
+#ifndef VSTBRIDGE_PE_HOST
 class StdIoCapture {
    public:
     /**
@@ -89,6 +97,7 @@ class StdIoCapture {
      */
     int pipe_fd_[2];
 };
+#endif
 
 /**
  * A 'plugin group' that listens on a _group socket_ for plugins to host in this
@@ -221,6 +230,7 @@ class GroupBridge {
      * related operation should be run from the same thread, we can't just add
      * another thread to the main IO context.
      */
+#ifndef VSTBRIDGE_PE_HOST
     asio::io_context stdio_context_;
 
     asio::streambuf stdout_buffer_;
@@ -241,13 +251,14 @@ class GroupBridge {
      * A thread that runs the `stdio_context_` loop.
      */
     Win32Thread stdio_handler_;
+#endif
 
-    asio::local::stream_protocol::endpoint group_socket_endpoint_;
+    ipc::endpoint group_socket_endpoint_;
     /**
      * The UNIX domain socket acceptor that will be used to listen for incoming
      * connections to spawn new plugins within this process.
      */
-    asio::local::stream_protocol::acceptor group_socket_acceptor_;
+    ipc::acceptor group_socket_acceptor_;
 
     /**
      * A map of threads that are currently hosting a plugin within this process

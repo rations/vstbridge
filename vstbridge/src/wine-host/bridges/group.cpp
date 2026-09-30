@@ -18,7 +18,12 @@
 
 #include "../use-linux-asio.h"
 
+#ifdef VSTBRIDGE_PE_HOST
+#include "../unixlib/pe.h"
+#else
 #include <unistd.h>
+#endif
+#include <fstream>
 #include <regex>
 
 #include "../../common/communication/common.h"
@@ -52,15 +57,32 @@ using namespace std::literals::chrono_literals;
  * @throw std::runtime_error If another process is already listening on the
  *        endpoint.
  */
-asio::local::stream_protocol::acceptor create_acceptor_if_inactive(
+ipc::acceptor create_acceptor_if_inactive(
     asio::io_context& io_context,
-    asio::local::stream_protocol::endpoint& endpoint);
+    ipc::endpoint& endpoint);
 
 /**
  * Create a logger prefix containing the group name based on the socket path.
  */
 std::string create_logger_prefix(const fs::path& socket_path);
 
+/**
+ * This process's Linux process ID. The native plugin checks whether the group
+ * host is still alive using this.
+ */
+int32_t get_unix_pid() {
+#ifdef VSTBRIDGE_PE_HOST
+    // `getpid()` would return the Windows process ID here
+    unixlib::ProcessArgs args{};
+    unixlib::call(unixlib::process_id, &args);
+
+    return args.pid;
+#else
+    return getpid();
+#endif
+}
+
+#ifndef VSTBRIDGE_PE_HOST
 StdIoCapture::StdIoCapture(asio::io_context& io_context, int file_descriptor)
     : pipe_(io_context),
       target_fd_(file_descriptor),
@@ -87,19 +109,23 @@ StdIoCapture::~StdIoCapture() noexcept {
     close(original_fd_copy_);
     close(pipe_fd_[0]);
 }
+#endif
 
 GroupBridge::GroupBridge(ghc::filesystem::path group_socket_path)
     : logger_(Logger::create_from_environment(
           create_logger_prefix(group_socket_path))),
       main_context_(),
+#ifndef VSTBRIDGE_PE_HOST
       stdio_context_(),
       stdout_redirect_(stdio_context_, STDOUT_FILENO),
       stderr_redirect_(stdio_context_, STDERR_FILENO),
+#endif
       group_socket_endpoint_(group_socket_path.string()),
       group_socket_acceptor_(
           create_acceptor_if_inactive(main_context_.context_,
                                       group_socket_endpoint_)),
       shutdown_timer_(main_context_.context_) {
+#ifndef VSTBRIDGE_PE_HOST
     // Write this process's original STDOUT and STDERR streams to the logger
     logger_.async_log_pipe_lines(stdout_redirect_.pipe_, stdout_buffer_,
                                  "[STDOUT] ");
@@ -107,19 +133,22 @@ GroupBridge::GroupBridge(ghc::filesystem::path group_socket_path)
                                  "[STDERR] ");
 
     stdio_handler_ = Win32Thread([&]() {
-        pthread_setname_np(pthread_self(), "group-stdio");
+        set_current_thread_name("group-stdio");
 
         stdio_context_.run();
     });
+#endif
 }
 
 GroupBridge::~GroupBridge() noexcept {
     // Our fancy `Vst2Sockets` and `Vst3Sockets` clean up after themselves, but
     // here we need to do it manually
     // TODO: Encapsulate this, destructors are evil
-    fs::remove(group_socket_endpoint_.path());
+    ipc::remove_endpoint(group_socket_endpoint_);
 
+#ifndef VSTBRIDGE_PE_HOST
     stdio_context_.stop();
+#endif
 }
 
 bool GroupBridge::is_event_loop_inhibited() noexcept {
@@ -180,7 +209,7 @@ void GroupBridge::handle_incoming_connections() {
 void GroupBridge::accept_requests() {
     group_socket_acceptor_.async_accept(
         [&](const std::error_code& error,
-            asio::local::stream_protocol::socket socket) {
+            ipc::socket socket) {
             std::lock_guard lock(active_plugins_mutex_);
 
             // Stop the whole process when the socket gets closed unexpectedly
@@ -198,7 +227,7 @@ void GroupBridge::accept_requests() {
             // this process to crash during its initialization to prevent
             // waiting indefinitely on the sockets to be connected to.
             const auto request = read_object<HostRequest>(socket);
-            write_object(socket, HostResponse{.pid = getpid()});
+            write_object(socket, HostResponse{.pid = get_unix_pid()});
 
             // The plugin has to be initiated on the IO context's thread because
             // this has to be done on the same thread that's handling messages,
@@ -213,12 +242,20 @@ void GroupBridge::accept_requests() {
                 // take longer to initialize if it is new
                 shutdown_timer_.cancel();
 
+#ifdef VSTBRIDGE_PE_HOST
+                // See `host.cpp`
+                const std::string plugin_path =
+                    unixlib::unix_path_to_dos_path(request.plugin_path);
+#else
+                const std::string& plugin_path = request.plugin_path;
+#endif
+
                 std::unique_ptr<HostBridge> bridge = nullptr;
                 switch (request.plugin_type) {
                     case PluginType::clap:
 #ifdef WITH_CLAP
                         bridge = std::make_unique<ClapBridge>(
-                            main_context_, request.plugin_path,
+                            main_context_, plugin_path,
                             request.endpoint_base_dir, request.parent_pid);
 #else
                         throw std::runtime_error(
@@ -228,13 +265,13 @@ void GroupBridge::accept_requests() {
                         break;
                     case PluginType::vst2:
                         bridge = std::make_unique<Vst2Bridge>(
-                            main_context_, request.plugin_path,
+                            main_context_, plugin_path,
                             request.endpoint_base_dir, request.parent_pid);
                         break;
                     case PluginType::vst3:
 #ifdef WITH_VST3
                         bridge = std::make_unique<Vst3Bridge>(
-                            main_context_, request.plugin_path,
+                            main_context_, plugin_path,
                             request.endpoint_base_dir, request.parent_pid);
 #else
                         throw std::runtime_error(
@@ -268,7 +305,7 @@ void GroupBridge::accept_requests() {
                     Win32Thread([this, plugin_id, plugin_ptr = bridge.get()]() {
                         const std::string thread_name =
                             "worker-" + std::to_string(plugin_id);
-                        pthread_setname_np(pthread_self(), thread_name.c_str());
+                        set_current_thread_name(thread_name.c_str());
 
                         handle_plugin_run(plugin_id, plugin_ptr);
                     }),
@@ -303,16 +340,24 @@ void GroupBridge::async_handle_events() {
         [&]() { return !is_event_loop_inhibited(); });
 }
 
-asio::local::stream_protocol::acceptor create_acceptor_if_inactive(
+ipc::acceptor create_acceptor_if_inactive(
     asio::io_context& io_context,
-    asio::local::stream_protocol::endpoint& endpoint) {
+    ipc::endpoint& endpoint) {
     // First try to listen on the endpoint normally
     try {
-        return asio::local::stream_protocol::acceptor(io_context, endpoint);
+        return ipc::acceptor(io_context, endpoint);
     } catch (const std::system_error&) {
         // If this failed, then either there is a stale socket file or another
         // process is already is already listening. In the last case we will
         // simply throw so the other process can handle the request.
+#ifdef VSTBRIDGE_PE_HOST
+        // The PE host can't read `/proc`, so the unixlib does this same check
+        unixlib::SocketListeningArgs args{.path = endpoint.path().c_str()};
+        unixlib::call(unixlib::path_socket_listening, &args);
+        if (args.listening) {
+            throw;
+        }
+#else
         std::ifstream open_sockets("/proc/net/unix");
         const std::string endpoint_path = endpoint.path();
         for (std::string line; std::getline(open_sockets, line);) {
@@ -328,9 +373,11 @@ asio::local::stream_protocol::acceptor create_acceptor_if_inactive(
             }
         }
 
+#endif
+
         // At this point we can remove the stale socket and start listening
-        fs::remove(endpoint_path);
-        return asio::local::stream_protocol::acceptor(io_context, endpoint);
+        ipc::remove_endpoint(endpoint);
+        return ipc::acceptor(io_context, endpoint);
     }
 }
 

@@ -1,0 +1,82 @@
+From 051efc24dcd44bafaf661363e958a5a763b472da Mon Sep 17 00:00:00 2001
+From: rations <ehqcar@proton.me>
+Date: Mon, 27 Jul 2026 01:36:07 +1000
+Subject: [PATCH] dxgi: Wait for a refresh interval in
+ IDXGIOutput::WaitForVBlank().
+
+WaitForVBlank() printed a FIXME and returned E_NOTIMPL immediately,
+without waiting for anything.
+
+Applications that pace a rendering thread on it therefore spin: JUCE 8's
+Direct2D renderer runs a dedicated thread that calls WaitForVBlank() in a
+loop and drives all of its repainting from the result. With the stub that
+loop never throttles to the refresh rate. Measured on a Nembrini Audio
+VST3 plug-in editor under a software OpenGL adapter, it made 62,024 calls
+in about 25 seconds and saturated a CPU core, and the plug-in's editor
+painted a single frame and then never updated or responded to input again
+- although win32u was delivering every mouse message to its window
+correctly.
+
+There is no vertical blank signal available to wait on, so sleep to the
+next refresh interval boundary derived from the output's current display
+mode instead. That is what callers of this function actually need: a
+cadence to render at. Phase-locking to a monotonic tick rather than
+sleeping a fixed amount keeps the cadence stable no matter how long the
+caller spent rendering between calls.
+
+Not conditional on any platform - the stub behaves the same everywhere,
+which matches reports of the same plug-ins being uninteractive under Wine
+on Linux until DXVK, whose own DXGI implementation does wait, is
+installed.
+---
+ dlls/dxgi/output.c | 32 ++++++++++++++++++++++++++------
+ 1 file changed, 26 insertions(+), 6 deletions(-)
+
+diff --git a/dlls/dxgi/output.c b/dlls/dxgi/output.c
+index e828ed0..9690dee 100644
+--- a/dlls/dxgi/output.c
++++ b/dlls/dxgi/output.c
+@@ -363,14 +363,34 @@ static HRESULT STDMETHODCALLTYPE dxgi_output_FindClosestMatchingMode(IDXGIOutput
+ 
+ static HRESULT STDMETHODCALLTYPE dxgi_output_WaitForVBlank(IDXGIOutput6 *iface)
+ {
+-    static BOOL once = FALSE;
++    struct dxgi_output *output = impl_from_IDXGIOutput6(iface);
++    enum wined3d_display_rotation rotation;
++    struct wined3d_display_mode mode;
++    unsigned int refresh_rate, interval;
++    HRESULT hr;
+ 
+-    if (!once++)
+-        FIXME("iface %p stub!\n", iface);
+-    else
+-        TRACE("iface %p stub!\n", iface);
++    TRACE("iface %p.\n", iface);
+ 
+-    return E_NOTIMPL;
++    wined3d_mutex_lock();
++    hr = wined3d_output_get_display_mode(output->wined3d_output, &mode, &rotation);
++    wined3d_mutex_unlock();
++    if (FAILED(hr))
++    {
++        WARN("Failed to get output display mode, hr %#lx.\n", hr);
++        return hr;
++    }
++
++    /* There is no vertical blank to wait on, so approximate one by sleeping to
++     * the next refresh interval boundary. Callers use this to pace a rendering
++     * thread, so returning without waiting turns that thread into a busy loop. */
++    if (!(refresh_rate = mode.refresh_rate))
++        refresh_rate = 60;
++    if (!(interval = 1000 / refresh_rate))
++        interval = 1;
++
++    Sleep(interval - (unsigned int)(GetTickCount64() % interval));
++
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE dxgi_output_TakeOwnership(IDXGIOutput6 *iface, IUnknown *device, BOOL exclusive)
+-- 
+2.47.3
+

@@ -105,7 +105,7 @@ void MainContext::run() {
         async_handle_watchdog_timer(5s);
 
         watchdog_handler_ = Win32Thread([&]() {
-            pthread_setname_np(pthread_self(), "watchdog");
+            set_current_thread_name("watchdog");
 
             watchdog_context_.run();
         });

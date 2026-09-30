@@ -1,0 +1,22 @@
+From: rations <ehqcar@proton.me>
+Subject: [PATCH] loader: Use FEX as the x86 and x86_64 emulators on ARM64.
+
+Wine's defaults point at its own xtajit64.dll and xtajit.dll, which are
+stubs. Use FEX's libarm64ecfex.dll and libwow64fex.dll instead, as Proton's
+Wine does (proton_11.0 loader/wine.inf.in). The values have no NOCLOBBER
+flag so that `wineboot -u` also fixes existing prefixes.
+---
+--- a/loader/wine.inf.in
++++ b/loader/wine.inf.in
+@@ -402,9 +402,9 @@
+ HKLM,%CurrentVersion%,"CommonFilesDir (x86)",,"%16428%"
+ HKLM,%CurrentVersion%,"ProgramFilesDir (Arm)",,"C:\Program Files (Arm)"
+ HKLM,%CurrentVersion%,"CommonFilesDir (Arm)",,"C:\Program Files (Arm)\Common Files"
+-HKLM,Software\Microsoft\Wow64\amd64,,2,"xtajit64.dll"
++HKLM,Software\Microsoft\Wow64\amd64,,,"libarm64ecfex.dll"
+ HKLM,Software\Microsoft\Wow64\arm,,2,"wowarmhw.dll"
+-HKLM,Software\Microsoft\Wow64\x86,,2,"xtajit.dll"
++HKLM,Software\Microsoft\Wow64\x86,,,"libwow64fex.dll"
+ 
+ [CurrentVersionWow64.ntx86]
+ HKLM,%CurrentVersion%,"ProgramFilesDir (x86)",,"%16422%"

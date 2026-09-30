@@ -37,7 +37,7 @@ std::string format_uid(const Steinberg::FUID& uid) {
 }
 
 std::u16string tchar_pointer_to_u16string(const Steinberg::Vst::TChar* string) {
-#ifdef __WINE__
+#if defined(__WINE__) || defined(VSTBRIDGE_PE_HOST)
     // This is great, thanks Steinberg
     static_assert(sizeof(Steinberg::Vst::TChar) == sizeof(char16_t));
     return std::u16string(reinterpret_cast<const char16_t*>(string));
@@ -48,7 +48,7 @@ std::u16string tchar_pointer_to_u16string(const Steinberg::Vst::TChar* string) {
 
 std::u16string tchar_pointer_to_u16string(const Steinberg::Vst::TChar* string,
                                           uint32 length) {
-#ifdef __WINE__
+#if defined(__WINE__) || defined(VSTBRIDGE_PE_HOST)
     static_assert(sizeof(Steinberg::Vst::TChar) == sizeof(char16_t));
     return std::u16string(reinterpret_cast<const char16_t*>(string), length);
 #else
@@ -58,7 +58,7 @@ std::u16string tchar_pointer_to_u16string(const Steinberg::Vst::TChar* string,
 
 const Steinberg::Vst::TChar* u16string_to_tchar_pointer(
     const std::u16string& string) noexcept {
-#ifdef __WINE__
+#if defined(__WINE__) || defined(VSTBRIDGE_PE_HOST)
     static_assert(sizeof(Steinberg::Vst::TChar) == sizeof(char16_t));
     return reinterpret_cast<const Steinberg::Vst::TChar*>(string.c_str());
 #else

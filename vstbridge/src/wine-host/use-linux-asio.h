@@ -16,6 +16,13 @@
 
 #pragma once
 
+// The PE plugin host is a real Windows program, so it uses Asio's Windows
+// backend. Its Unix domain sockets are handled separately, see
+// `common/communication/ipc.h`.
+#ifdef VSTBRIDGE_PE_HOST
+#include <asio/basic_socket_streambuf.hpp>
+#else
+
 // Libraries like (Boost.)Asio think we're compiling on Windows or using a MSVC
 // toolchain. This will cause them to make incorrect assumptions which platform
 // specific features are available. The only way around this I could think of
@@ -45,3 +52,5 @@
 #pragma pop_macro("_WIN32")
 #pragma pop_macro("__WIN32__")
 #pragma pop_macro("_WIN64")
+
+#endif

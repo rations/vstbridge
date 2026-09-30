@@ -71,7 +71,7 @@ intptr_t DefaultDataConverter::return_value(const int /*opcode*/,
 }
 
 Vst2EventResult DefaultDataConverter::send_event(
-    asio::local::stream_protocol::socket& socket,
+    ipc::socket& socket,
     const Vst2Event& event,
     SerializationBufferBase& buffer) const {
     write_object(socket, event, buffer);

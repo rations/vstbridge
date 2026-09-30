@@ -2,7 +2,7 @@
 # to keep all relevant files in the root of the build directory, and Meson
 # doesn't have a way to customize that yet.
 
-if is_64bit_system
+if with_64bit_host
   host_64bit_deps = [
     configuration_dep,
 
@@ -64,7 +64,6 @@ host_sources = files(
   '../common/logging/vst2.cpp',
   '../common/audio-shm.cpp',
   '../common/plugins.cpp',
-  '../common/process.cpp',
   '../common/utils.cpp',
   '../include/llvm/small-vector.cpp',
   'bridges/common.cpp',
@@ -159,4 +158,33 @@ if with_vst3
     'bridges/vst3-impls/plug-frame-proxy.cpp',
     'bridges/vst3.cpp',
   )
+endif
+
+# The Winelib host uses `common/process.cpp` directly. The PE host can't, and
+# does the Linux parts through its unixlib instead.
+host_winelib_sources = host_sources + files('../common/process.cpp')
+
+if with_pe_host
+  host_pe_deps = [
+    configuration_dep,
+
+    asio_pe_dep,
+    bitsery_dep,
+    function2_dep,
+    ghc_filesystem_dep,
+    tomlplusplus_dep,
+  ]
+  if with_clap
+    host_pe_deps += [clap_dep]
+  endif
+  if with_vst3
+    host_pe_deps += [vst3_sdk_hosting_pe_dep]
+  endif
+
+  host_pe_sources = host_sources + files(
+    'unixlib/ipc-socket.cpp',
+    'unixlib/pe.cpp',
+    'unixlib/xcb-thunks.cpp',
+  )
+  unixlib_sources = files('unixlib/unixlib.cpp')
 endif
