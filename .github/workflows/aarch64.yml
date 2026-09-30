@@ -1,6 +1,5 @@
-# Build vstbridge and its Wine for aarch64 (Raspberry Pi 5 / Pivuan), package them as .debs
-# for the Pivuan apt repository and, when started by hand with "release", make a GitHub release
-# of them.
+# Build vstbridge and its Wine for aarch64 (Raspberry Pi 5 / Pivuan) and package them as .debs
+# for the Pivuan apt repository.
 #
 # Built natively on GitHub's arm64 runner in a Debian trixie container, the same setup as
 # Pivuan's own apps (rations/build: .github/workflows/pivuan-apps.yml): trixie has the same
@@ -13,28 +12,39 @@
 # - native: the plugin and chainloader libraries, vstbridgectl, and the plugin host. Wine does
 #   not support Winelib hosts on aarch64, so the host is an ARM64EC PE executable
 #   (-Dwine-host=pe, cross compiled with llvm-mingw) plus the native unixlib it uses for Linux
-#   APIs. Also the standalone vstbridge-aarch64.tar.gz for the releases page.
+#   APIs. Also the standalone vstbridge-aarch64.tar.gz, kept as a workflow artifact.
 # - debs: wine-fex, wine-fex-i386, wine-fex-mono and vstbridge (aarch64/build-debs.sh)
 # - check: installs the packages in a clean trixie container and runs vstbridgectl sync, which
 #   creates a Wine prefix and starts the plugin host through Wine
-# - release: a pre-release of this repository (tag aarch64-<version>-<commits>) with the
-#   packages, SHA256SUMS and the standalone tarball. It uses this workflow's own token and needs
-#   no secrets. The "vstbridge for Pivuan" workflow in rations/pivuan then adds the packages
-#   from the release to the Pivuan apt repository, the same way it publishes XLibre, so no
-#   token for rations/pivuan is needed here.
+#
+# Pushes here build and check. The "vstbridge for Pivuan" workflow in rations/pivuan calls this
+# workflow (workflow_call) to build the packages in its own run, then publishes the pivuan-debs
+# artifact to the Pivuan apt repository with its own token, as it does XLibre. So this
+# repository needs no secrets and makes no releases. When called, the jobs check out the
+# `repository` and `ref` inputs, because actions/checkout would otherwise check out the caller.
 #
 # Versions are pinned in aarch64/versions.sh. The Wine and FEX builds are cached on the hash of
-# their scripts, versions and patches, so a run only rebuilds what changed.
+# their scripts, versions and patches, so a run only rebuilds what changed. Caches belong to the
+# repository whose run made them, so rations/pivuan keeps its own.
 
 name: aarch64 build
 
 on:
   workflow_dispatch:
+  workflow_call:
     inputs:
-      release:
-        description: "Make a GitHub release with the packages and the tarball"
-        type: boolean
-        default: false
+      repository:
+        description: "The vstbridge repository to build"
+        type: string
+        default: rations/vstbridge
+      ref:
+        description: "The branch, tag or commit of it to build"
+        type: string
+        required: true
+    outputs:
+      version:
+        description: "vstbridge's package version (without the -pivuan revision)"
+        value: ${{ jobs.native.outputs.version }}
   push:
     branches: [arm64]
     paths:
@@ -47,9 +57,15 @@ on:
 permissions:
   contents: read
 
+# In a run of this repository there are no inputs, and the jobs check out the commit that
+# started it, as usual.
+env:
+  VSTBRIDGE_REPOSITORY: ${{ inputs.repository || github.repository }}
+  VSTBRIDGE_REF: ${{ inputs.ref }}
+
 concurrency:
   group: aarch64-${{ github.ref }}
-  # Never cancel a run that may make a release
+  # Never cancel a run started by hand
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
@@ -67,6 +83,9 @@ jobs:
           apt-get install -y -q --no-install-recommends git ca-certificates zstd
 
       - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.VSTBRIDGE_REPOSITORY }}
+          ref: ${{ env.VSTBRIDGE_REF }}
 
       - name: Cache
         id: cache
@@ -111,6 +130,9 @@ jobs:
           apt-get install -y -q --no-install-recommends git ca-certificates zstd file xz-utils
 
       - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.VSTBRIDGE_REPOSITORY }}
+          ref: ${{ env.VSTBRIDGE_REF }}
 
       - name: Cache
         id: cache
@@ -152,7 +174,6 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     outputs:
       version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Build dependencies
         run: |
@@ -164,6 +185,8 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
+          repository: ${{ env.VSTBRIDGE_REPOSITORY }}
+          ref: ${{ env.VSTBRIDGE_REF }}
           # The package version counts the commits
           fetch-depth: 0
 
@@ -188,8 +211,7 @@ jobs:
             -Dwine-host=pe --cross-file cross-arm64ec.conf \
             -Dwine-loader=/opt/vstbridge/wine/bin/wine
 
-      # <meson version>+git<commits>.<commit>: newer commits get higher versions. The release
-      # tag leaves out the "+", which doesn't belong in URLs.
+      # <meson version>+git<commits>.<commit>: newer commits get higher versions
       - name: Version
         id: version
         run: |
@@ -198,7 +220,6 @@ jobs:
           meson_version="$(meson introspect vstbridge/build --projectinfo | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])')"
           version="${meson_version}+git$(git rev-list --count HEAD).$(git rev-parse --short=9 HEAD)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=aarch64-${meson_version}-$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
           echo "vstbridge $version"
 
       - name: Build plugin libraries and plugin host
@@ -274,6 +295,9 @@ jobs:
             libdbus-1-3 libgtk-3-0t64 libxcb1
 
       - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.VSTBRIDGE_REPOSITORY }}
+          ref: ${{ env.VSTBRIDGE_REF }}
 
       - name: Cache llvm-mingw
         uses: actions/cache@v4
@@ -368,43 +392,3 @@ jobs:
           fi
           test -d "$HOME/.wine/drive_c/windows/mono"
           wineserver -k || true
-
-  release:
-    needs: [native, check]
-    if: inputs.release
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dl
-
-      - name: Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.native.outputs.tag }}
-          VERSION: ${{ needs.native.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir release
-          cp dl/pivuan-debs/*.deb dl/vstbridge-aarch64/vstbridge-aarch64.tar.gz release/
-          (cd release && sha256sum -- * > SHA256SUMS)
-          cat release/SHA256SUMS
-
-          notes="$RUNNER_TEMP/notes.md"
-          cat > "$notes" <<EOF
-          vstbridge $VERSION for 64-bit ARM (Raspberry Pi 5), with Wine (wine-staging, ARM64EC) and FEX, which runs the Windows plugins' x86_64 code.
-
-          - The \`.deb\` packages are for Pivuan. The "vstbridge for Pivuan" workflow in rations/pivuan adds them to the Pivuan apt repository, and Pivuan Audio installs them. \`vstbridge\` depends on the three \`wine-fex\` packages.
-          - \`vstbridge-aarch64.tar.gz\` is vstbridge on its own. It needs Wine and FEX from the \`wine-fex\` packages.
-          EOF
-
-          # A run started again adds to its release rather than failing
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber release/*
-          else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --prerelease --title "vstbridge $VERSION for aarch64" --notes-file "$notes" release/*
-          fi
-          echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

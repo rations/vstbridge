@@ -26,13 +26,12 @@ The `aarch64 build` GitHub Actions workflow runs on arm64 runners:
 - It builds vstbridge itself into `vstbridge-aarch64.tar.gz`.
 - It packages them as .debs, installs those in a clean Debian trixie container, and runs
   `vstbridgectl sync` there.
-- Started by hand with "release", it makes a pre-release here (tag `aarch64-<version>-<commits>`)
-  with the packages, `SHA256SUMS` and the tarball. It needs no secrets.
 
-To publish a release to the Pivuan apt repository, run the "vstbridge for Pivuan" workflow in
-rations/pivuan. Leave its tag empty to use the newest aarch64 release. It checks the packages
-against `SHA256SUMS` and publishes them with its own token and the `PIVUAN_APT_SIGNING_KEY` secret,
-as XLibre is published, so this repository needs no token for rations/pivuan.
+The packages reach the Pivuan apt repository through the "vstbridge for Pivuan" workflow in
+rations/pivuan. It calls this workflow on the `arm64` branch as a reusable workflow, so the build
+runs in rations/pivuan, and then publishes the packages from that same run with its own token and
+the `PIVUAN_APT_SIGNING_KEY` secret, as XLibre is published. This repository needs no secrets and
+makes no releases for it.
 
 ## Pivuan packages
 
