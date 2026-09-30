@@ -23,6 +23,7 @@
 #include <config.h>
 
 #include "../common/configuration.h"
+#include "../common/linking.h"
 #include "../common/notifications.h"
 #include "../common/toml++.h"
 #include "../common/utils.h"
@@ -367,6 +368,16 @@ fs::path find_plugin_host(const ghc::filesystem::path& this_plugin_path,
     // of the file that symlink points to
     fs::path host_path =
         fs::canonical(this_plugin_path).remove_filename() / host_name;
+    if (fs::exists(host_path)) {
+        return host_path;
+    }
+
+    // With the chainloaders, `this_plugin_path` is the chainloader's copy, and
+    // this library was loaded from wherever vstbridge is installed. A
+    // system-wide install keeps the host next to the plugin libraries (e.g. in
+    // `/usr/lib/aarch64-linux-gnu`), which is not in the search path.
+    host_path =
+        fs::canonical(get_this_file_location()).remove_filename() / host_name;
     if (fs::exists(host_path)) {
         return host_path;
     }

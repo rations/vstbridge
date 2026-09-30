@@ -43,7 +43,7 @@ void write_file(const fs::path& path, const std::string& contents);
 std::string read_to_string(const fs::path& path);
 std::vector<uint8_t> read_bytes(const fs::path& path);
 
-bool verify_path_setup();
+bool verify_path_setup(const Config& config);
 void verify_wine_setup(Config& config);
 void verify_external_dependencies();
 

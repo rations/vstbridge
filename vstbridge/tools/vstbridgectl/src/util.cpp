@@ -301,8 +301,19 @@ static int run_command_status(const std::string& cmd, const std::vector<std::str
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
-bool verify_path_setup() {
-    // First check ~/.local/share/vstbridge directly (vstbridge always searches there)
+bool verify_path_setup(const Config& config) {
+    // The plugins look for the host next to the plugin libraries first, so a
+    // system-wide install (with everything in the multiarch library directory)
+    // doesn't need the host in the search path
+    try {
+        const auto files = config.files();
+        if (files.vstbridge_host_exe &&
+            files.vstbridge_host_exe->parent_path() == files.vst2_chainloader.parent_path())
+            return true;
+    } catch (...) {
+    }
+
+    // Then check ~/.local/share/vstbridge directly (vstbridge always searches there)
     try {
         auto xdg_home = vstbridge_data_home();
         auto host_exe = xdg_home / VSTBRIDGE_HOST_EXE_NAME;
