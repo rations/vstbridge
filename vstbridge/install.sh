@@ -41,6 +41,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
         "$DATA_DIR"/libvstbridge-chainloader-clap.so \
         "$DATA_DIR"/vstbridge-host.exe \
         "$DATA_DIR"/vstbridge-host.exe.so \
+        "$DATA_DIR"/vstbridge-host-unixlib.so \
         "$DATA_DIR"/vstbridge-host-32.exe \
         "$DATA_DIR"/vstbridge-host-32.exe.so \
         "$DATA_DIR"/vstbridgectl \
@@ -85,6 +86,7 @@ for f in \
     libvstbridge-chainloader-clap.so \
     vstbridge-host.exe \
     vstbridge-host.exe.so \
+    vstbridge-host-unixlib.so \
     vstbridge-host-32.exe \
     vstbridge-host-32.exe.so \
     vstbridgectl \
@@ -143,7 +145,11 @@ echo "  4. Point your DAW at the vstbridge output directories:"
 echo "       VST2:  ~/.vst/vstbridge/"
 echo "       VST3:  ~/.vst3/vstbridge/"
 echo "       CLAP:  ~/.clap/vstbridge/"
-echo ""
-echo " Note: some plugins require DXVK to render their GUI inside a DAW."
-echo " Install DXVK via winetricks:  winetricks dxvk - for older hardware try dxvk1092"
-echo " as the latest dxvk can cause your DAW to freeze." 
+# The aarch64 build's Wine has the dxgi fix that makes DXVK unnecessary, and DXVK
+# doesn't run on the Raspberry Pi 5's GPU
+if [ ! -f "$SCRIPT_DIR/vstbridge-host-unixlib.so" ]; then
+    echo ""
+    echo " Note: some plugins require DXVK to render their GUI inside a DAW."
+    echo " Install DXVK via winetricks:  winetricks dxvk - for older hardware try dxvk1092"
+    echo " as the latest dxvk can cause your DAW to freeze."
+fi 

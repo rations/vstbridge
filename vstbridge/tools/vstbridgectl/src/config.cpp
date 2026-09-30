@@ -273,7 +273,17 @@ VstbridgeFiles Config::files() const {
             clap_chainloader = {candidate, get_elf_architecture(candidate)};
     }
 
-    auto host_exe = which(VSTBRIDGE_HOST_EXE_NAME);
+    // Like the plugin itself, look for the host next to the plugin libraries
+    // first (a system-wide install has them all in the multiarch library
+    // directory), and then in the search path
+    auto find_host = [&](const char* name) -> std::optional<fs::path> {
+        auto candidate = vst2_chainloader.parent_path() / name;
+        if (fs::exists(candidate))
+            return candidate;
+        return which(name);
+    };
+
+    auto host_exe = find_host(VSTBRIDGE_HOST_EXE_NAME);
     std::optional<fs::path> host_exe_so;
     bool host_is_pe = false;
     if (host_exe) {
@@ -288,7 +298,7 @@ VstbridgeFiles Config::files() const {
         }
     }
 
-    auto host_32_exe = which(VSTBRIDGE_HOST_32_EXE_NAME);
+    auto host_32_exe = find_host(VSTBRIDGE_HOST_32_EXE_NAME);
     std::optional<fs::path> host_32_exe_so;
     if (host_32_exe) {
         auto so = host_32_exe->parent_path() / (host_32_exe->filename().string() + ".so");

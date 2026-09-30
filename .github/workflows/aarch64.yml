@@ -1,25 +1,45 @@
-# Build vstbridge for aarch64 (Raspberry Pi 5 / Pivuan).
+# Build vstbridge and its Wine for aarch64 (Raspberry Pi 5 / Pivuan), package them as .debs
+# for the Pivuan apt repository and, when started by hand with "release", make a GitHub release
+# of them.
 #
 # Built natively on GitHub's arm64 runner in a Debian trixie container, the same setup as
 # Pivuan's own apps (rations/build: .github/workflows/pivuan-apps.yml): trixie has the same
 # libraries as Devuan excalibur.
 #
-# Builds the plugin and chainloader libraries, vstbridgectl, and the plugin host. Wine does
-# not support Winelib hosts on aarch64, so the host is an ARM64EC PE executable
-# (-Dwine-host=pe, cross compiled with llvm-mingw) plus the native unixlib it uses for Linux
-# APIs. It runs on the Wine and FEX build from aarch64-wine.yml, installed to
-# /opt/vstbridge/wine.
+# - wine: wine-staging built for ARM64EC (arm64ec,aarch64,i386) with vstbridge's patches from
+#   aarch64/wine/patches, installed to /opt/vstbridge/wine
+# - fex: FEX's libarm64ecfex.dll and libwow64fex.dll plus their unixlibs, which install over
+#   that Wine tree
+# - native: the plugin and chainloader libraries, vstbridgectl, and the plugin host. Wine does
+#   not support Winelib hosts on aarch64, so the host is an ARM64EC PE executable
+#   (-Dwine-host=pe, cross compiled with llvm-mingw) plus the native unixlib it uses for Linux
+#   APIs. Also the standalone vstbridge-aarch64.tar.gz for the releases page.
+# - debs: wine-fex, wine-fex-i386, wine-fex-mono and vstbridge (aarch64/build-debs.sh)
+# - check: installs the packages in a clean trixie container and runs vstbridgectl sync, which
+#   creates a Wine prefix and starts the plugin host through Wine
+# - release: a pre-release of this repository (tag aarch64-<version>-<commits>) with the
+#   packages, SHA256SUMS and the standalone tarball. It uses this workflow's own token and needs
+#   no secrets. The "vstbridge for Pivuan" workflow in rations/pivuan then adds the packages
+#   from the release to the Pivuan apt repository, the same way it publishes XLibre, so no
+#   token for rations/pivuan is needed here.
+#
+# Versions are pinned in aarch64/versions.sh. The Wine and FEX builds are cached on the hash of
+# their scripts, versions and patches, so a run only rebuilds what changed.
 
 name: aarch64 build
 
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Make a GitHub release with the packages and the tarball"
+        type: boolean
+        default: false
   push:
     branches: [arm64]
     paths:
       - "vstbridge/**"
-      - "aarch64/versions.sh"
-      - "aarch64/lib.sh"
+      - "aarch64/**"
       - ".github/workflows/aarch64.yml"
   pull_request:
     branches: [arm64]
@@ -29,15 +49,110 @@ permissions:
 
 concurrency:
   group: aarch64-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a run that may make a release
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
+  wine:
+    name: Wine (ARM64EC)
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    timeout-minutes: 300
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends git ca-certificates zstd
+
+      - uses: actions/checkout@v4
+
+      - name: Cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: dist/vstbridge-wine-aarch64.tar.xz
+          key: wine-${{ hashFiles('aarch64/versions.sh', 'aarch64/lib.sh', 'aarch64/build-wine.sh', 'aarch64/wine/patches/**') }}
+
+      - name: Build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          apt-get install -y -q --no-install-recommends \
+            build-essential autoconf bison flex gettext perl python3 patch pkg-config curl xz-utils \
+            libx11-dev libxext-dev libxcomposite-dev libxcursor-dev libxfixes-dev libxinerama-dev \
+            libxi-dev libxrandr-dev libxrender-dev libxxf86vm-dev \
+            libegl-dev libgl-dev libvulkan-dev \
+            libfreetype-dev libfontconfig-dev libgnutls28-dev \
+            libasound2-dev libdbus-1-dev libudev-dev
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p dist
+          aarch64/build-wine.sh "$RUNNER_TEMP/wine" dist/vstbridge-wine-aarch64.tar.xz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vstbridge-wine-aarch64
+          path: dist/vstbridge-wine-aarch64.tar.xz
+          compression-level: 0
+
+  fex:
+    name: FEX DLLs
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Tools
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends git ca-certificates zstd file xz-utils
+
+      - uses: actions/checkout@v4
+
+      - name: Cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: dist/vstbridge-fex-aarch64.tar.xz
+          key: fex-${{ hashFiles('aarch64/versions.sh', 'aarch64/lib.sh', 'aarch64/build-fex.sh') }}
+
+      - name: Build dependencies
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          apt-get install -y -q --no-install-recommends \
+            build-essential cmake ninja-build python3 curl
+
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p dist
+          aarch64/build-fex.sh "$RUNNER_TEMP/fex" dist/vstbridge-fex-aarch64.tar.xz
+
+      - name: Check the binaries
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/check"
+          tar -C "$RUNNER_TEMP/check" -xJf dist/vstbridge-fex-aarch64.tar.xz
+          find "$RUNNER_TEMP/check" -type f -exec file {} +
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vstbridge-fex-aarch64
+          path: dist/vstbridge-fex-aarch64.tar.xz
+          compression-level: 0
+
   native:
     name: Plugin libraries, plugin host and vstbridgectl
     runs-on: ubuntu-24.04-arm
     container: debian:trixie
     env:
       DEBIAN_FRONTEND: noninteractive
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Build dependencies
         run: |
@@ -48,6 +163,9 @@ jobs:
             curl xz-utils libdbus-1-dev libgtk-3-dev libxcb1-dev
 
       - uses: actions/checkout@v4
+        with:
+          # The package version counts the commits
+          fetch-depth: 0
 
       - name: Cache llvm-mingw
         uses: actions/cache@v4
@@ -69,6 +187,19 @@ jobs:
           meson setup build --buildtype=release \
             -Dwine-host=pe --cross-file cross-arm64ec.conf \
             -Dwine-loader=/opt/vstbridge/wine/bin/wine
+
+      # <meson version>+git<commits>.<commit>: newer commits get higher versions. The release
+      # tag leaves out the "+", which doesn't belong in URLs.
+      - name: Version
+        id: version
+        run: |
+          set -eu
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          meson_version="$(meson introspect vstbridge/build --projectinfo | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])')"
+          version="${meson_version}+git$(git rev-list --count HEAD).$(git rev-parse --short=9 HEAD)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=aarch64-${meson_version}-$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+          echo "vstbridge $version"
 
       - name: Build plugin libraries and plugin host
         working-directory: vstbridge
@@ -102,17 +233,169 @@ jobs:
           fi
           exit "$fail"
 
+      # The tarball holds a single `vstbridge` directory, so extracting it in ~/.local/share
+      # gives ~/.local/share/vstbridge, where vstbridgectl looks by default.
       - name: Stage
         run: |
           set -eu
-          dist=dist/vstbridge-aarch64
+          dist=dist/vstbridge
           mkdir -p "$dist"
           cp -a vstbridge/build/lib*.so vstbridge/build/vstbridge-host.exe \
             vstbridge/build/vstbridge-host-unixlib.so "$dist/"
           cp -a vstbridge/tools/vstbridgectl/build/vstbridgectl vstbridge/tools/vstbridgectl/build/vstbridgectl-gtk "$dist/"
-          tar -C dist -czf dist/vstbridge-aarch64.tar.gz vstbridge-aarch64
+          cp -a vstbridge/install.sh vstbridge/uninstall.sh "$dist/"
+          tar -C dist -czf dist/vstbridge-aarch64.tar.gz vstbridge
 
       - uses: actions/upload-artifact@v4
         with:
           name: vstbridge-aarch64
           path: dist/vstbridge-aarch64.tar.gz
+
+  debs:
+    name: Packages
+    needs: [wine, fex, native]
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      # The libraries Wine was built against, so build-debs.sh can find the packages of the
+      # ones Wine loads at runtime (the same list as the wine job's build dependencies)
+      - name: Tools and Wine's libraries
+        run: |
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends \
+            dpkg-dev file curl xz-utils binutils ca-certificates \
+            libx11-dev libxext-dev libxcomposite-dev libxcursor-dev libxfixes-dev libxinerama-dev \
+            libxi-dev libxrandr-dev libxrender-dev libxxf86vm-dev \
+            libegl-dev libgl-dev libvulkan-dev \
+            libfreetype-dev libfontconfig-dev libgnutls28-dev \
+            libasound2-dev libdbus-1-dev libudev-dev \
+            libdbus-1-3 libgtk-3-0t64 libxcb1
+
+      - uses: actions/checkout@v4
+
+      - name: Cache llvm-mingw
+        uses: actions/cache@v4
+        with:
+          path: toolchain
+          key: llvm-mingw-${{ hashFiles('aarch64/versions.sh') }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+
+      - name: Build the packages
+        env:
+          TOOLCHAIN_DIR: ${{ github.workspace }}/toolchain
+        run: |
+          aarch64/build-debs.sh debs \
+            dl/vstbridge-wine-aarch64/vstbridge-wine-aarch64.tar.xz \
+            dl/vstbridge-fex-aarch64/vstbridge-fex-aarch64.tar.xz \
+            dl/vstbridge-aarch64/vstbridge-aarch64.tar.gz \
+            "${{ needs.native.outputs.version }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pivuan-debs
+          path: debs/*.deb
+          if-no-files-found: error
+          compression-level: 0
+
+  check:
+    name: Install and run the packages
+    needs: debs
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    timeout-minutes: 60
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pivuan-debs
+          path: debs
+
+      - name: Install
+        run: |
+          set -eu
+          apt-get update -q
+          apt-get install -y -q --no-install-recommends file ./debs/*.deb
+          for deb in debs/*.deb; do
+            echo "::group::$(basename "$deb")"
+            dpkg-deb -I "$deb"
+            echo "::endgroup::"
+          done
+
+      - name: Every program and library finds its libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          fail=0
+          # Wine's Unix libraries also link to each other (ntdll.so, win32u.so), which Wine
+          # loads from its own directory
+          export LD_LIBRARY_PATH=/opt/vstbridge/wine/lib/wine/aarch64-unix
+          for pkg in wine-fex vstbridge; do
+            while IFS= read -r f; do
+              [[ -f "$f" && ! -L "$f" ]] && file -b "$f" | grep -q '^ELF' || continue
+              if ldd "$f" 2>&1 | grep -q 'not found'; then
+                echo "::error::$f: $(ldd "$f" | grep 'not found' | tr '\n' ' ')"
+                fail=1
+              fi
+            done < <(dpkg -L "$pkg")
+          done
+          exit "$fail"
+
+      # vstbridgectl must find the system-wide install, and sync runs the plugin host through
+      # Wine. That creates ~/.wine, which must get Mono from wine-fex-mono without a download.
+      - name: vstbridgectl sync
+        shell: bash
+        run: |
+          set -euxo pipefail
+          wine --version
+          vstbridgectl status
+          mkdir -p /tmp/plugins
+          vstbridgectl add /tmp/plugins
+          vstbridgectl sync
+          test -d "$HOME/.wine/drive_c/windows/mono"
+          wineserver -k || true
+
+  release:
+    needs: [native, check]
+    if: inputs.release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dl
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.native.outputs.tag }}
+          VERSION: ${{ needs.native.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir release
+          cp dl/pivuan-debs/*.deb dl/vstbridge-aarch64/vstbridge-aarch64.tar.gz release/
+          (cd release && sha256sum -- * > SHA256SUMS)
+          cat release/SHA256SUMS
+
+          notes="$RUNNER_TEMP/notes.md"
+          cat > "$notes" <<EOF
+          vstbridge $VERSION for 64-bit ARM (Raspberry Pi 5), with Wine (wine-staging, ARM64EC) and FEX, which runs the Windows plugins' x86_64 code.
+
+          - The \`.deb\` packages are for Pivuan. The "vstbridge for Pivuan" workflow in rations/pivuan adds them to the Pivuan apt repository, and Pivuan Audio installs them. \`vstbridge\` depends on the three \`wine-fex\` packages.
+          - \`vstbridge-aarch64.tar.gz\` is vstbridge on its own. It needs Wine and FEX from the \`wine-fex\` packages.
+          EOF
+
+          # A run started again adds to its release rather than failing
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber release/*
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --prerelease --title "vstbridge $VERSION for aarch64" --notes-file "$notes" release/*
+          fi
+          echo "Release: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"

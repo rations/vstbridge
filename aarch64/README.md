@@ -18,9 +18,38 @@ through Wine's ARM64EC support and FEX's `libarm64ecfex.dll`.
   - `0002`: new prefixes use FEX for x86_64 and i386 code (the `HKLM\Software\Microsoft\Wow64`
     keys), as Proton's Wine does. Upstream points them at stubs.
 
-The `aarch64 Wine and FEX` GitHub Actions workflow runs both scripts on arm64 runners and uploads
-`vstbridge-wine-aarch64.tar.xz` and `vstbridge-fex-aarch64.tar.xz`. The `aarch64 build` workflow
-builds vstbridge itself into `vstbridge-aarch64.tar.gz`.
+- `build-debs.sh`: packages everything for the Pivuan apt repository (below).
+
+The `aarch64 build` GitHub Actions workflow runs on arm64 runners:
+- It runs the two build scripts (cached, so Wine is only rebuilt when its scripts, versions or
+  patches change) and uploads `vstbridge-wine-aarch64.tar.xz` and `vstbridge-fex-aarch64.tar.xz`.
+- It builds vstbridge itself into `vstbridge-aarch64.tar.gz`.
+- It packages them as .debs, installs those in a clean Debian trixie container, and runs
+  `vstbridgectl sync` there.
+- Started by hand with "release", it makes a pre-release here (tag `aarch64-<version>-<commits>`)
+  with the packages, `SHA256SUMS` and the tarball. It needs no secrets.
+
+To publish a release to the Pivuan apt repository, run the "vstbridge for Pivuan" workflow in
+rations/pivuan. Leave its tag empty to use the newest aarch64 release. It checks the packages
+against `SHA256SUMS` and publishes them with its own token and the `PIVUAN_APT_SIGNING_KEY` secret,
+as XLibre is published, so this repository needs no token for rations/pivuan.
+
+## Pivuan packages
+
+Pivuan Audio installs vstbridge from the Pivuan apt repository. `vstbridge` depends on the rest.
+
+| Package | Contents |
+|---|---|
+| `wine-fex` | Wine and FEX in `/opt/vstbridge/wine`. `wine`, `winecfg` and Wine's other programs in `/usr/bin`. The "Wine Windows Program Loader" for opening `.exe` and `.msi` files, and Wine Configuration and Uninstall Windows Programs menu entries. |
+| `wine-fex-i386` | Wine's 32-bit Windows side, for 32-bit programs such as many installers. |
+| `wine-fex-mono` | The wine-mono installer, so creating a Wine prefix needs no download. |
+| `vstbridge` | The plugin libraries and the plugin host in `/usr/lib/aarch64-linux-gnu`, plus `vstbridgectl` and `vstbridgectl-gtk` in `/usr/bin`. |
+
+- The Wine packages conflict with Debian's `wine`, because both install `/usr/bin/wine`.
+- The apt repository is a GitHub branch, and GitHub refuses files over 100 MiB. That's why Wine is
+  split into three packages, and why its Windows DLLs are stripped of their debug info (2.4 GB
+  installed before, 1 GB after).
+- Everything uses the default Wine prefix, `~/.wine`.
 
 ## The plugin host on aarch64
 
@@ -49,13 +78,21 @@ with x86_64 Wine.
 After the Wine and FEX tarballs below are installed:
 
 ```sh
-mkdir -p ~/.local/share/vstbridge
-tar -C ~/.local/share/vstbridge --strip-components=1 -xzf vstbridge-aarch64.tar.gz
+# The tarball holds a `vstbridge` directory. install.sh copies it to
+# ~/.local/share/vstbridge and adds vstbridgectl to the menu, as for x86_64.
+tar -xzf vstbridge-aarch64.tar.gz
+vstbridge/install.sh
 
-# The plugins' directory inside the Wine prefix, then set up the bridged copies
-~/.local/share/vstbridge/vstbridgectl add "$HOME/.wine-vstbridge-arm64/drive_c/Program Files/Common Files/VST3"
+# The plugins' directory inside the Wine prefix, then set up the bridged copies (or use
+# vstbridgectl from the menu)
+~/.local/share/vstbridge/vstbridgectl add "$HOME/.wine/drive_c/Program Files/Common Files/VST3"
 ~/.local/share/vstbridge/vstbridgectl sync
 ```
+
+Everything uses Wine's default prefix, `~/.wine`. Keep plugins there too: `vstbridgectl sync`
+runs the plugin host through Wine without a `WINEPREFIX`, so it creates `~/.wine` if it doesn't
+exist yet (the "Wine configuration is being updated" window). Plugins are run in the prefix
+they're installed in.
 
 ## Trying the Wine build on the Pi
 
@@ -66,7 +103,6 @@ sudo tar -C / -xJf vstbridge-wine-aarch64.tar.xz
 sudo tar -C / -xJf vstbridge-fex-aarch64.tar.xz
 
 export PATH=/opt/vstbridge/wine/bin:$PATH
-export WINEPREFIX=$HOME/.wine-vstbridge-arm64
 wineboot -i
 
 # Should print libarm64ecfex.dll and libwow64fex.dll

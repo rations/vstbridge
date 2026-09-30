@@ -16,6 +16,7 @@ rm -f \
     "$DATA_DIR"/libvstbridge-chainloader-clap.so \
     "$DATA_DIR"/vstbridge-host.exe \
     "$DATA_DIR"/vstbridge-host.exe.so \
+    "$DATA_DIR"/vstbridge-host-unixlib.so \
     "$DATA_DIR"/vstbridge-host-32.exe \
     "$DATA_DIR"/vstbridge-host-32.exe.so \
     "$DATA_DIR"/vstbridgectl \
