@@ -47,6 +47,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   `aarch64-linux-gnu` library directories.
 - `install.sh` and `uninstall.sh` now handle `vstbridge-host-unixlib.so`.
 
+- Release tarballs are now built with `make-release.sh`, which replaces
+  `package.sh`. They're named `vstbridge-<version>-x86_64.tar.gz` and come
+  with a `.sha256` file. They still unpack into `vstbridge/`. They now
+  include the license. The unused `vstbridgectl-gtk.desktop` file is no longer
+  included, because `install.sh` writes its own.
+
 ### Fixed
 
 - Fixed a race in vstbridgectl's Makefile where `make -j` could compile

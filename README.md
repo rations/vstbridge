@@ -18,7 +18,7 @@ Upstream yabridge 5.1.1 breaks with Wine ≥ 9.21: plugins render their GUI but 
 
 XEmbed is also enabled by default in this fork (`editor_xembed = true` in `src/common/configuration.h`).
 
-For the full technical analysis see [readme-fixes.md](readme-fixes.md).
+For the full technical analysis see [readme-fixes.md](https://github.com/rations/vstbridge/blob/master/readme-fixes.md).
 
 ### GTK3 GUI for vstbridgectl
 
@@ -69,11 +69,12 @@ Release binaries require glibc ≥ 2.34 and libstdc++ ≥ GCC 11 (built on Devua
 Download the latest release tarball from the [releases page](https://github.com/rations/vstbridge/releases), then extract and run the installer:
 
 ```bash
-tar -xf vstbridge-0.0.2.tar.gz
+tar -xf vstbridge-<version>-x86_64.tar.gz
 cd vstbridge
-chmod +x install.sh
 ./install.sh
 ```
+
+Each tarball comes with a `.sha256` file. You can check the download with `sha256sum -c vstbridge-<version>-x86_64.sha256`.
 
 The installer copies everything to `~/.local/share/vstbridge/` and adds `vstbridgectl-gtk` to your application menu. No root or sudo is required.
 
@@ -239,6 +240,25 @@ cd tools/vstbridgectl
 # Fetch dependencies and build both CLI and GUI
 make
 ```
+
+### Making a release tarball
+
+`make-release.sh` builds vstbridge (with the 32-bit host) and vstbridgectl from scratch in a temporary directory, then packages them with the installer:
+
+```bash
+./make-release.sh                    # writes dist/vstbridge-<version>-x86_64.tar.gz and .sha256
+./make-release.sh --max-glibc 2.34   # also fail if the binaries need a newer glibc
+```
+
+The version comes from `git describe`. On a tagged commit (`v0.0.3`) you get `vstbridge-0.0.3-x86_64.tar.gz`. On any other commit you get a test build named after that commit, such as `vstbridge-0.0.2-16-gc41c2b1-x86_64.tar.gz`. The tracked files must be committed first.
+
+Before writing the archive, the script checks that:
+
+- it contains exactly the expected files
+- the binaries contain no paths from the build machine
+- the binaries only link expected libraries
+
+It also prints the minimum glibc the binaries need. It then unpacks the archive, installs it into a scratch home directory, checks that vstbridgectl finds the installed files, and uninstalls it again. Published releases are built on Devuan Daedalus so they run on older distributions.
 
 ---
 

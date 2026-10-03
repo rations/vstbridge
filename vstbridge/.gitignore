@@ -2,3 +2,4 @@
 CLAUDE.md
 *.zip
 *.tar.gz
+/dist/
