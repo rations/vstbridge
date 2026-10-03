@@ -14,6 +14,39 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   variables for a plugin's Wine host process, such as per-plugin
   `WINEDLLOVERRIDES`, so plugins with different requirements can share one Wine
   prefix. The variables are also shown in the startup log.
+- Added support for aarch64 Linux, such as the Raspberry Pi 5. The native
+  plugin libraries and vstbridgectl build for aarch64. Windows plugins run
+  through Wine's ARM64EC support with FEX for x86 emulation. ARM64 plugin DLLs
+  are also accepted.
+- Added a PE plugin host (`-Dwine-host=pe`), because Wine doesn't support
+  Winelib executables on aarch64. `vstbridge-host.exe` is built as an ARM64EC
+  program (`cross-arm64ec.conf`), or as x86_64 for testing
+  (`cross-mingw-x86_64.conf`). It comes with `vstbridge-host-unixlib.so`, a
+  native library it uses through Wine's unixlib mechanism for sockets, shared
+  memory audio buffers, realtime scheduling and X11. A new `wine-loader` build
+  option sets the Wine binary used to start it. `-Dwine-host=none` builds only
+  the native plugin libraries.
+- Added scripts and CI for aarch64 builds of Wine (wine-staging 11.18) and FEX.
+  They include patches for JUCE 8 GUIs without DXVK and for using FEX as the
+  default Wow64 emulator.
+- Added Debian packages for Pivuan: `vstbridge`, installed system-wide, and
+  `wine-fex`, `wine-fex-i386` and `wine-fex-mono`. They're built in
+  rations/pivuan.
+
+### Changed
+
+- On aarch64, flush-to-zero is set through FPCR instead of MXCSR, and `-msse2`
+  is only passed on x86.
+- vstbridgectl and the native plugin now look for the plugin host next to
+  the plugin libraries before searching `PATH`, so system-wide installs are
+  found. The chainloader and vstbridgectl also search the
+  `aarch64-linux-gnu` library directories.
+- `install.sh` and `uninstall.sh` now handle `vstbridge-host-unixlib.so`.
+
+### Fixed
+
+- Fixed a race in vstbridgectl's Makefile where `make -j` could compile
+  sources before the dependencies had been fetched.
 
 ## [0.0.2] - 2026-06-06
 
