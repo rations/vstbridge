@@ -126,6 +126,29 @@ Configuration::Configuration(const fs::path& config_path,
                 } else {
                     invalid_options.emplace_back(key);
                 }
+            } else if (key == "environment") {
+                // An array of `KEY=VALUE` strings. Any malformed entry
+                // invalidates the whole option so typos don't go unnoticed.
+                const auto parsed_value = value.as_array();
+                bool valid = parsed_value != nullptr;
+                std::vector<std::string> entries{};
+                if (parsed_value) {
+                    for (const auto& element : *parsed_value) {
+                        const auto entry = element.as_string();
+                        if (!entry || entry->get().find('=') == 0 ||
+                            entry->get().find('=') == std::string::npos) {
+                            valid = false;
+                            break;
+                        }
+                        entries.push_back(entry->get());
+                    }
+                }
+
+                if (valid) {
+                    environment = std::move(entries);
+                } else {
+                    invalid_options.emplace_back(key);
+                }
             } else if (key == "frame_rate") {
                 if (const auto parsed_value = value.as_floating_point()) {
                     frame_rate = parsed_value->get();

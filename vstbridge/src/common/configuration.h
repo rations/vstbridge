@@ -164,6 +164,16 @@ class Configuration {
     bool vst3_prefer_32bit = false;
 
     /**
+     * Extra environment variables for the Wine plugin host process, as
+     * `KEY=VALUE` strings. These are applied after vstbridge's own changes to
+     * the environment, so they can override things like `WINEPREFIX`. This is
+     * mostly useful for per-plugin `WINEDLLOVERRIDES`. Plugins in a plugin
+     * group share a single process, so there the environment of the plugin that
+     * started the group's host process is used.
+     */
+    std::vector<std::string> environment;
+
+    /**
      * The path to the configuration file that was parsed.
      */
     std::optional<ghc::filesystem::path> matched_file;
@@ -207,6 +217,8 @@ class Configuration {
         s.value1b(hide_daw);
         s.value1b(editor_disable_host_scaling);
         s.value1b(vst3_prefer_32bit);
+        s.container(environment, 1024,
+                    [](S& s, auto& v) { s.text1b(v, 32768); });
 
         s.ext(matched_file, bitsery::ext::InPlaceOptional(),
               [](S& s, auto& v) { s.ext(v, bitsery::ext::GhcPath{}); });

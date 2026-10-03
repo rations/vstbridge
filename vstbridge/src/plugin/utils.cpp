@@ -58,7 +58,8 @@ PluginInfo::PluginInfo(PluginType plugin_type,
           normalize_plugin_path(windows_library_path_, plugin_type)),
       wine_prefix_(find_wine_prefix(windows_plugin_path_)) {}
 
-ProcessEnvironment PluginInfo::create_host_env() const {
+ProcessEnvironment PluginInfo::create_host_env(
+    const Configuration& config) const {
     ProcessEnvironment env(environ);
 
     // Only set the prefix when could auto detect it and it's not being
@@ -80,6 +81,16 @@ ProcessEnvironment PluginInfo::create_host_env() const {
     // So we'll preemptively avoid this by unsetting the `WAYLAND_DISPLAY`
     // environment variable.
     env.erase("WAYLAND_DISPLAY");
+
+    // The user's per-plugin variables go last so they take precedence.
+    // `ProcessEnvironment::insert()` appends, so existing definitions need to
+    // be removed first.
+    for (const auto& variable : config.environment) {
+        const size_t separator = variable.find('=');
+        const std::string key = variable.substr(0, separator);
+        env.erase(key);
+        env.insert(key, variable.substr(separator + 1));
+    }
 
     return env;
 }
@@ -114,10 +125,10 @@ std::string PluginInfo::wine_loader() const {
     }
 }
 
-std::string PluginInfo::wine_version() const {
+std::string PluginInfo::wine_version(const Configuration& config) const {
     Process process(wine_loader());
     process.arg("--version");
-    process.environment(create_host_env());
+    process.environment(create_host_env(config));
 
     const auto result = process.spawn_get_stdout_line();
     return std::visit(

@@ -249,7 +249,7 @@ class PluginBridge {
             info_.wine_prefix_);
         init_msg << "'" << std::endl;
 
-        init_msg << "wine version:  '" << info_.wine_version() << "'"
+        init_msg << "wine version:  '" << info_.wine_version(config_) << "'"
                  << std::endl;
         init_msg << std::endl;
 
@@ -312,6 +312,9 @@ class PluginBridge {
         }
         if (config_.vst3_prefer_32bit) {
             other_options.push_back("vst3: prefer 32-bit");
+        }
+        for (const auto& variable : config_.environment) {
+            other_options.push_back("env: " + variable);
         }
         if (!other_options.empty()) {
             init_msg << join_quoted_strings(other_options) << std::endl;

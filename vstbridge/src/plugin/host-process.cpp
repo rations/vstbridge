@@ -65,7 +65,7 @@ Process::Handle HostProcess::launch_host(
         child.arg(arg);
     }
 
-    child.environment(plugin_info.create_host_env());
+    child.environment(plugin_info.create_host_env(config));
     Process::Handle child_handle = std::visit(
         overload{
             [](Process::Handle handle) -> Process::Handle { return handle; },

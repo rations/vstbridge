@@ -83,8 +83,11 @@ struct PluginInfo {
      *
      * This also unsets `WAYLAND_DISPLAY` so if Wine has been compiled with
      * Wayland support, it won't suddenly start using that over X11.
+     *
+     * Finally, the variables from the plugin's `environment` option are
+     * applied, overriding any of the above.
      */
-    ProcessEnvironment create_host_env() const;
+    ProcessEnvironment create_host_env(const Configuration& config) const;
 
     /**
      * Return the path to the actual Wine prefix in use, taking into account
@@ -103,7 +106,7 @@ struct PluginInfo {
      * This will *not* throw when Wine can not be found, but will instead return
      * '<NOT FOUND>'. This way the user will still get some useful log files.
      */
-    std::string wine_version() const;
+    std::string wine_version(const Configuration& config) const;
 
     /**
      * The Wine binary to run Wine programs with. This is `WINELOADER` if set,

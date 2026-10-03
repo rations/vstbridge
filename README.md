@@ -231,6 +231,32 @@ make
 
 Plugin-level configuration is done via a `vstbridge.toml` file placed alongside plugin files or in a parent directory. See the upstream [yabridge configuration documentation](https://github.com/robbert-vdh/yabridge#configuration) for the available options — the TOML structure is unchanged.
 
+vstbridge adds a few options on top of yabridge's:
+
+| Option | Values | Description |
+|--------|--------|-------------|
+| `editor_xembed` | `{true,false}` | Embed the editor with XEmbed. Defaults to `true`. Set it to `false` to use yabridge's reparenting method instead. |
+| `editor_coordinate_hack` | `{true,false}` | Move the Wine window back to `(0, 0)` after every resize. This helps plugins that draw their GUI offset by the window's screen position. Defaults to `false`. |
+| `environment` | `["KEY=VALUE", ...]` | Extra environment variables for this plugin's Wine host process. They override vstbridge's own settings, including `WINEPREFIX`. Defaults to none. |
+
+`environment` lets plugins with different Wine requirements share one prefix. For example, you can give one plugin its own DLL overrides:
+
+```toml
+# ~/.vst3/vstbridge/vstbridge.toml
+["SSL Native*.vst3"]
+environment = ["WINEDLLOVERRIDES=d3d11,dxgi=n,b"]
+
+["Roland Cloud/*"]
+editor_xembed = false
+```
+
+A few things to keep in mind:
+
+- The settings apply per plugin, not per instance. VST3 and CLAP host every instance of a plugin in a single process.
+- In a plugin group, all plugins share one process. The `environment` of the plugin that started the group is the one that's used.
+- vstbridge uses the first section whose pattern matches the plugin, and sections don't merge. Put specific patterns above broad ones like `["*"]`.
+- `WINELOADER` can't be set through `environment`, because vstbridge reads it before the host process starts. Set it in your DAW's environment instead.
+
 ### Environment variables
 
 | Variable | Description |
