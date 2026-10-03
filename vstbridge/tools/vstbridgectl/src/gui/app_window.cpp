@@ -18,8 +18,11 @@
 
 #include <unistd.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -27,6 +30,7 @@
 #include "../actions.h"
 #include "../actions/blacklist.h"
 #include "../config.h"
+#include "../plugin_config.h"
 
 namespace fs = std::filesystem;
 
@@ -626,6 +630,446 @@ GtkWidget* AppWindow::build_blacklist_tab() {
     return box;
 }
 
+// ─── Plugins tab ──────────────────────────────────────────────────────────────
+
+struct PluginRow {
+    Plugin      plugin;
+    std::string name;
+    std::string location;
+    bool        customized;
+};
+
+struct PluginScanResult {
+    AppWindow*             win;
+    std::vector<PluginRow> rows;
+    std::string            error_msg;
+};
+
+static const VstbridgeFiles* try_get_files(const Config& config,
+                                           std::optional<VstbridgeFiles>& storage) {
+    try {
+        storage = config.files();
+        return &*storage;
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
+static bool has_custom_settings(const Plugin& plugin, const Config& config,
+                                const VstbridgeFiles* files) {
+    try {
+        return locate_plugin_config(plugin, config, files).has_own_section;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+static gboolean plugin_scan_done_cb(gpointer data) {
+    auto* result = static_cast<PluginScanResult*>(data);
+    AppWindow* win = result->win;
+
+    GList* kids = gtk_container_get_children(GTK_CONTAINER(win->plugins_list));
+    for (GList* l = kids; l; l = l->next)
+        gtk_widget_destroy(GTK_WIDGET(l->data));
+    g_list_free(kids);
+    win->plugins.clear();
+    win->plugin_status_lbls.clear();
+
+    for (size_t i = 0; i < result->rows.size(); ++i) {
+        const auto& row_data = result->rows[i];
+
+        GtkWidget* box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+        gtk_widget_set_margin_start(box, 8);
+        gtk_widget_set_margin_end(box, 8);
+        gtk_widget_set_margin_top(box, 5);
+        gtk_widget_set_margin_bottom(box, 5);
+
+        GtkWidget* format_lbl = gtk_label_new(plugin_format_name(row_data.plugin));
+        gtk_style_context_add_class(gtk_widget_get_style_context(format_lbl), "dim-label");
+        gtk_label_set_width_chars(GTK_LABEL(format_lbl), 5);
+        gtk_label_set_xalign(GTK_LABEL(format_lbl), 0.0f);
+        gtk_box_pack_start(GTK_BOX(box), format_lbl, FALSE, FALSE, 0);
+
+        GtkWidget* name_lbl = gtk_label_new(row_data.name.c_str());
+        gtk_label_set_xalign(GTK_LABEL(name_lbl), 0.0f);
+        gtk_box_pack_start(GTK_BOX(box), name_lbl, FALSE, FALSE, 0);
+
+        GtkWidget* loc_lbl = gtk_label_new(row_data.location.c_str());
+        gtk_style_context_add_class(gtk_widget_get_style_context(loc_lbl), "dim-label");
+        gtk_label_set_xalign(GTK_LABEL(loc_lbl), 0.0f);
+        gtk_label_set_ellipsize(GTK_LABEL(loc_lbl), PANGO_ELLIPSIZE_MIDDLE);
+        gtk_box_pack_start(GTK_BOX(box), loc_lbl, TRUE, TRUE, 0);
+
+        GtkWidget* status_lbl = gtk_label_new("custom settings");
+        gtk_widget_set_no_show_all(status_lbl, TRUE);
+        gtk_widget_set_visible(status_lbl, row_data.customized);
+        gtk_box_pack_end(GTK_BOX(box), status_lbl, FALSE, FALSE, 0);
+
+        GtkWidget* row = gtk_list_box_row_new();
+        gtk_container_add(GTK_CONTAINER(row), box);
+        g_object_set_data(G_OBJECT(row), "plugin-index", GSIZE_TO_POINTER(i));
+        gtk_list_box_insert(GTK_LIST_BOX(win->plugins_list), row, -1);
+
+        win->plugins.push_back(row_data.plugin);
+        win->plugin_status_lbls.push_back(status_lbl);
+    }
+    gtk_widget_show_all(win->plugins_list);
+
+    gtk_spinner_stop(GTK_SPINNER(win->plugins_spinner));
+    gtk_widget_hide(win->plugins_spinner);
+    gtk_widget_set_sensitive(win->plugins_refresh_btn, TRUE);
+
+    if (!result->error_msg.empty())
+        show_error(win->window, result->error_msg);
+
+    delete result;
+    return FALSE;
+}
+
+void AppWindow::refresh_plugin_list() {
+    if (!gtk_widget_get_sensitive(plugins_refresh_btn)) return;
+    plugins_loaded = true;
+    gtk_widget_set_sensitive(plugins_refresh_btn, FALSE);
+    gtk_widget_show(plugins_spinner);
+    gtk_spinner_start(GTK_SPINNER(plugins_spinner));
+
+    // Scanning reads every plugin file, so it runs on a copy of the config in
+    // the background
+    std::thread([win = this, config = config]() {
+        auto* result = new PluginScanResult{win, {}, {}};
+        try {
+            std::optional<VstbridgeFiles> files_storage;
+            const VstbridgeFiles* files = try_get_files(config, files_storage);
+
+            for (const auto& [dir, search_results] : config.search_directories()) {
+                for (const auto& plugin : search_results.plugins) {
+                    const fs::path original = std::visit(
+                        [](const auto& p) -> fs::path {
+                            if constexpr (std::is_same_v<std::decay_t<decltype(p)>,
+                                                         Vst3Module>)
+                                return p.original_path();
+                            else
+                                return p.path;
+                        },
+                        plugin);
+                    result->rows.push_back(PluginRow{
+                        plugin, plugin_display_name(plugin),
+                        pretty_path(original.parent_path()),
+                        has_custom_settings(plugin, config, files)});
+                }
+            }
+            std::sort(result->rows.begin(), result->rows.end(),
+                      [](const PluginRow& a, const PluginRow& b) {
+                          return g_utf8_collate(a.name.c_str(), b.name.c_str()) < 0;
+                      });
+        } catch (const std::exception& e) {
+            result->error_msg = e.what();
+        }
+        g_idle_add(plugin_scan_done_cb, result);
+    }).detach();
+}
+
+static GtkWidget* make_option_check(GtkWidget* grid, int& row, const char* label,
+                                    const char* tooltip, bool active) {
+    GtkWidget* cb = gtk_check_button_new_with_label(label);
+    gtk_widget_set_tooltip_text(cb, tooltip);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(cb), active);
+    gtk_grid_attach(GTK_GRID(grid), cb, 0, row++, 2, 1);
+    return cb;
+}
+
+static GtkWidget* make_dim_label(const std::string& text) {
+    GtkWidget* lbl = gtk_label_new(text.c_str());
+    gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
+    gtk_label_set_line_wrap(GTK_LABEL(lbl), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(lbl), 70);
+    gtk_style_context_add_class(gtk_widget_get_style_context(lbl), "dim-label");
+    return lbl;
+}
+
+static void on_frame_rate_toggled(GtkToggleButton* cb, gpointer spin) {
+    gtk_widget_set_sensitive(GTK_WIDGET(spin), gtk_toggle_button_get_active(cb));
+}
+
+enum { RESPONSE_RESET = 1 };
+
+void AppWindow::configure_plugin(size_t index) {
+    // A background scan may replace `plugins` while the dialog is open
+    const Plugin plugin = plugins.at(index);
+    const std::vector<GtkWidget*> status_lbls = plugin_status_lbls;
+    std::optional<VstbridgeFiles> files_storage;
+    const VstbridgeFiles* files = try_get_files(config, files_storage);
+
+    PluginConfigTarget target;
+    PluginOptions opts;
+    try {
+        target = locate_plugin_config(plugin, config, files);
+        opts   = read_plugin_options(target);
+    } catch (const std::exception& e) {
+        show_error(window, e.what());
+        return;
+    }
+
+    const std::string title = plugin_display_name(plugin) + " Settings";
+    GtkWidget* dlg = gtk_dialog_new_with_buttons(
+        title.c_str(), GTK_WINDOW(window),
+        static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
+        "Reset to Defaults", RESPONSE_RESET,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Save", GTK_RESPONSE_ACCEPT, nullptr);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_ACCEPT);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(dlg), RESPONSE_RESET,
+                                      target.has_own_section);
+    gtk_window_set_default_size(GTK_WINDOW(dlg), 560, -1);
+
+    GtkWidget* grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 6);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
+    gtk_container_set_border_width(GTK_CONTAINER(grid), 12);
+    gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(dlg))),
+                       grid, TRUE, TRUE, 0);
+    int row = 0;
+
+    // Where the settings are stored, and what currently applies
+    std::string where = "Saved to section [\"" + target.section_key + "\"] in " +
+                        pretty_path(target.toml_file) + ".";
+    const bool shadowed = target.matching_section &&
+                          *target.matching_section != target.section_key;
+    if (shadowed) {
+        where += target.has_own_section
+                     ? " That section is currently overridden by the earlier [\""
+                     : " This plugin currently uses the [\"";
+        where += *target.matching_section + "\"] section";
+        where += target.has_own_section
+                     ? ". Saving moves this plugin's section to the top of the file."
+                     : ". The values below start from that section.";
+    }
+    gtk_grid_attach(GTK_GRID(grid), make_dim_label(where), 0, row++, 2, 1);
+
+    // Plugin group
+    GtkWidget* group_lbl = gtk_label_new("Plugin group:");
+    gtk_label_set_xalign(GTK_LABEL(group_lbl), 0.0f);
+    gtk_grid_attach(GTK_GRID(grid), group_lbl, 0, row, 1, 1);
+    GtkWidget* group_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(group_entry), "(hosted individually)");
+    gtk_widget_set_tooltip_text(group_entry,
+        "Plugins with the same group name are hosted in a single process, so "
+        "they can communicate with each other. They also share that process's "
+        "environment variables.");
+    gtk_widget_set_hexpand(group_entry, TRUE);
+    if (opts.group) gtk_entry_set_text(GTK_ENTRY(group_entry), opts.group->c_str());
+    gtk_grid_attach(GTK_GRID(grid), group_entry, 1, row++, 1, 1);
+
+    // Editor and compatibility options
+    GtkWidget* xembed_cb = make_option_check(grid, row,
+        "Embed the editor using XEmbed",
+        "Uncheck this to use the reparenting method instead. Try this if a "
+        "plugin's editor doesn't show up, renders incorrectly or doesn't resize.",
+        opts.editor_xembed);
+    GtkWidget* coord_cb = make_option_check(grid, row,
+        "Editor coordinate hack",
+        "Move the Wine window back to (0, 0) after every resize. Helps plugins "
+        "that draw their GUI offset by the window's position on screen.",
+        opts.editor_coordinate_hack);
+    GtkWidget* dnd_cb = make_option_check(grid, row,
+        "Force drag-and-drop support (REAPER)",
+        "REAPER's FX window intercepts files dropped onto plugin editors. This "
+        "strips drag-and-drop support from that window so the plugin gets them.",
+        opts.editor_force_dnd);
+    GtkWidget* scaling_cb = make_option_check(grid, row,
+        "Disable host HiDPI scaling (VST3 and CLAP)",
+        "Wine doesn't support fractional HiDPI scaling. Try this if the editor "
+        "has black borders on a HiDPI display.",
+        opts.editor_disable_host_scaling);
+    GtkWidget* hide_daw_cb = make_option_check(grid, row,
+        "Hide the DAW's name from the plugin",
+        "Report a different host name to the plugin. Some plugins behave "
+        "differently in specific DAWs.",
+        opts.hide_daw);
+    GtkWidget* prefer32_cb = nullptr;
+    if (std::holds_alternative<Vst3Module>(plugin)) {
+        prefer32_cb = make_option_check(grid, row,
+            "Prefer the 32-bit version",
+            "Use the 32-bit version of this VST3 plugin when the bundle "
+            "contains both a 32-bit and a 64-bit version.",
+            opts.vst3_prefer_32bit);
+    }
+
+    // Frame rate
+    GtkWidget* fps_cb = gtk_check_button_new_with_label("Editor frame rate:");
+    gtk_widget_set_tooltip_text(fps_cb,
+        "How often Win32 events are handled, which is usually also the editor's "
+        "refresh rate. Defaults to 60.");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(fps_cb), opts.frame_rate.has_value());
+    gtk_grid_attach(GTK_GRID(grid), fps_cb, 0, row, 1, 1);
+    GtkWidget* fps_spin = gtk_spin_button_new_with_range(1, 240, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(fps_spin), opts.frame_rate.value_or(60));
+    gtk_widget_set_sensitive(fps_spin, opts.frame_rate.has_value());
+    gtk_widget_set_halign(fps_spin, GTK_ALIGN_START);
+    g_signal_connect(fps_cb, "toggled", G_CALLBACK(on_frame_rate_toggled), fps_spin);
+    gtk_grid_attach(GTK_GRID(grid), fps_spin, 1, row++, 1, 1);
+
+    // Environment variables
+    GtkWidget* env_lbl = gtk_label_new("Wine environment variables:");
+    gtk_label_set_xalign(GTK_LABEL(env_lbl), 0.0f);
+    gtk_widget_set_margin_top(env_lbl, 6);
+    gtk_grid_attach(GTK_GRID(grid), env_lbl, 0, row++, 2, 1);
+
+    GtkWidget* env_tv = gtk_text_view_new();
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(env_tv), TRUE);
+    std::string env_text;
+    for (const auto& entry : opts.environment)
+        env_text += entry + "\n";
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(env_tv)),
+                             env_text.c_str(), -1);
+    GtkWidget* env_scroll = wrap_in_scroll(env_tv);
+    gtk_widget_set_size_request(env_scroll, -1, 90);
+    gtk_widget_set_vexpand(env_scroll, TRUE);
+    gtk_grid_attach(GTK_GRID(grid), env_scroll, 0, row++, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid),
+        make_dim_label("One KEY=VALUE per line, for example "
+                       "WINEDLLOVERRIDES=d3d11,dxgi=n,b"),
+        0, row++, 2, 1);
+
+    if (!opts.other.empty()) {
+        std::string kept = "Other options in this section are kept as they are:";
+        for (const auto& [key, value] : opts.other)
+            kept += " " + key;
+        gtk_grid_attach(GTK_GRID(grid), make_dim_label(kept), 0, row++, 2, 1);
+    }
+
+    GtkWidget* note = make_dim_label("Changes apply the next time the plugin is loaded.");
+    gtk_widget_set_margin_top(note, 6);
+    gtk_grid_attach(GTK_GRID(grid), note, 0, row++, 2, 1);
+
+    gtk_widget_show_all(dlg);
+
+    auto toggle = [](GtkWidget* cb) {
+        return gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(cb)) == TRUE;
+    };
+
+    while (true) {
+        const gint resp = gtk_dialog_run(GTK_DIALOG(dlg));
+        try {
+            if (resp == RESPONSE_RESET) {
+                remove_plugin_options(target);
+            } else if (resp == GTK_RESPONSE_ACCEPT) {
+                const std::string group = gtk_entry_get_text(GTK_ENTRY(group_entry));
+                opts.group = group.empty() ? std::nullopt
+                                           : std::optional<std::string>(group);
+                opts.editor_xembed               = toggle(xembed_cb);
+                opts.editor_coordinate_hack      = toggle(coord_cb);
+                opts.editor_force_dnd            = toggle(dnd_cb);
+                opts.editor_disable_host_scaling = toggle(scaling_cb);
+                opts.hide_daw                    = toggle(hide_daw_cb);
+                if (prefer32_cb)
+                    opts.vst3_prefer_32bit = toggle(prefer32_cb);
+                opts.frame_rate = toggle(fps_cb)
+                    ? std::optional<double>(
+                          gtk_spin_button_get_value(GTK_SPIN_BUTTON(fps_spin)))
+                    : std::nullopt;
+
+                GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(env_tv));
+                GtkTextIter start, end;
+                gtk_text_buffer_get_bounds(buf, &start, &end);
+                gchar* text = gtk_text_buffer_get_text(buf, &start, &end, FALSE);
+                std::istringstream lines(text);
+                g_free(text);
+                opts.environment.clear();
+                for (std::string line; std::getline(lines, line);) {
+                    const size_t first = line.find_first_not_of(" \t");
+                    if (first == std::string::npos) continue;
+                    line = line.substr(first, line.find_last_not_of(" \t") - first + 1);
+                    if (const auto error = validate_environment_entry(line))
+                        throw std::runtime_error(*error);
+                    opts.environment.push_back(line);
+                }
+
+                write_plugin_options(target, opts);
+            }
+        } catch (const std::exception& e) {
+            show_error(dlg, e.what());
+            continue;
+        }
+        break;
+    }
+    gtk_widget_destroy(dlg);
+
+    if (plugin_status_lbls == status_lbls)
+        gtk_widget_set_visible(plugin_status_lbls.at(index),
+                               has_custom_settings(plugin, config, files));
+}
+
+static void on_plugins_refresh(GtkButton*, gpointer data) {
+    static_cast<AppWindow*>(data)->refresh_plugin_list();
+}
+
+static void on_plugin_configure(GtkButton*, gpointer data) {
+    auto* win = static_cast<AppWindow*>(data);
+    GtkListBoxRow* row = gtk_list_box_get_selected_row(GTK_LIST_BOX(win->plugins_list));
+    if (!row) return;
+    win->configure_plugin(GPOINTER_TO_SIZE(g_object_get_data(G_OBJECT(row), "plugin-index")));
+}
+
+static void on_plugin_row_activated(GtkListBox*, GtkListBoxRow* row, gpointer data) {
+    auto* win = static_cast<AppWindow*>(data);
+    win->configure_plugin(GPOINTER_TO_SIZE(g_object_get_data(G_OBJECT(row), "plugin-index")));
+}
+
+static void on_plugin_row_selected(GtkListBox*, GtkListBoxRow* row, gpointer data) {
+    auto* win = static_cast<AppWindow*>(data);
+    gtk_widget_set_sensitive(win->plugins_configure_btn, row != nullptr);
+}
+
+static void on_notebook_switch_page(GtkNotebook*, GtkWidget* page, guint, gpointer data) {
+    auto* win = static_cast<AppWindow*>(data);
+    if (page == win->plugins_tab && !win->plugins_loaded)
+        win->refresh_plugin_list();
+}
+
+GtkWidget* AppWindow::build_plugins_tab() {
+    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_margin_top(box, 8);
+    gtk_widget_set_margin_bottom(box, 8);
+    gtk_widget_set_margin_start(box, 8);
+    gtk_widget_set_margin_end(box, 8);
+
+    GtkWidget* hint = gtk_label_new(
+        "Per-plugin settings, such as Wine DLL overrides. These are stored in "
+        "vstbridge.toml.");
+    gtk_label_set_xalign(GTK_LABEL(hint), 0.0f);
+    gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE);
+    gtk_widget_set_margin_bottom(hint, 6);
+    gtk_box_pack_start(GTK_BOX(box), hint, FALSE, FALSE, 0);
+
+    plugins_list = gtk_list_box_new();
+    gtk_list_box_set_selection_mode(GTK_LIST_BOX(plugins_list), GTK_SELECTION_SINGLE);
+    gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(plugins_list), FALSE);
+    g_signal_connect(plugins_list, "row-activated", G_CALLBACK(on_plugin_row_activated), this);
+    g_signal_connect(plugins_list, "row-selected", G_CALLBACK(on_plugin_row_selected), this);
+    gtk_box_pack_start(GTK_BOX(box), wrap_in_scroll(plugins_list), TRUE, TRUE, 0);
+
+    GtkWidget* btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    gtk_widget_set_margin_top(btn_row, 6);
+
+    plugins_configure_btn = gtk_button_new_with_label("Configure...");
+    gtk_widget_set_sensitive(plugins_configure_btn, FALSE);
+    g_signal_connect(plugins_configure_btn, "clicked", G_CALLBACK(on_plugin_configure), this);
+    gtk_box_pack_start(GTK_BOX(btn_row), plugins_configure_btn, FALSE, FALSE, 0);
+
+    plugins_refresh_btn = gtk_button_new_with_label("Refresh");
+    g_signal_connect(plugins_refresh_btn, "clicked", G_CALLBACK(on_plugins_refresh), this);
+    gtk_box_pack_start(GTK_BOX(btn_row), plugins_refresh_btn, FALSE, FALSE, 0);
+
+    plugins_spinner = gtk_spinner_new();
+    gtk_widget_set_no_show_all(plugins_spinner, TRUE);
+    gtk_box_pack_start(GTK_BOX(btn_row), plugins_spinner, FALSE, FALSE, 0);
+
+    gtk_box_pack_start(GTK_BOX(box), btn_row, FALSE, FALSE, 0);
+    plugins_tab = box;
+    return box;
+}
+
 // ─── AppWindow::create / show_all ────────────────────────────────────────────
 
 AppWindow* AppWindow::create() {
@@ -652,6 +1096,9 @@ AppWindow* AppWindow::create() {
     add_tab("Status",      win->build_status_tab());
     add_tab("Settings",    win->build_settings_tab());
     add_tab("Blacklist",   win->build_blacklist_tab());
+    add_tab("Plugins",     win->build_plugins_tab());
+    // The plugin list needs a full scan, so it's only loaded once it's shown
+    g_signal_connect(notebook, "switch-page", G_CALLBACK(on_notebook_switch_page), win);
 
     gtk_container_add(GTK_CONTAINER(win->window), notebook);
 
@@ -667,4 +1114,5 @@ void AppWindow::show_all() {
     // Spinners start hidden; show_all would have made them visible
     gtk_widget_hide(sync_spinner);
     gtk_widget_hide(status_spinner);
+    gtk_widget_hide(plugins_spinner);
 }

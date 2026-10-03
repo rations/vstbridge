@@ -17,9 +17,11 @@
 #pragma once
 
 #include <functional>
+#include <vector>
 #include <gtk/gtk.h>
 
 #include "../config.h"
+#include "../files.h"
 
 struct AppWindow {
     GtkWidget* window = nullptr;
@@ -50,6 +52,17 @@ struct AppWindow {
     // Tab: Blacklist
     GtkWidget* bl_list = nullptr;
 
+    // Tab: Plugins
+    GtkWidget* plugins_tab           = nullptr;
+    GtkWidget* plugins_list          = nullptr;
+    GtkWidget* plugins_refresh_btn   = nullptr;
+    GtkWidget* plugins_configure_btn = nullptr;
+    GtkWidget* plugins_spinner       = nullptr;
+    std::vector<Plugin> plugins;
+    // The "custom settings" label for each entry in `plugins`
+    std::vector<GtkWidget*> plugin_status_lbls;
+    bool plugins_loaded = false;
+
     Config config;
     bool busy = false;
 
@@ -63,10 +76,13 @@ struct AppWindow {
     void refresh_dir_list();
     void refresh_bl_list();
     void refresh_settings();
+    void refresh_plugin_list();
+    void configure_plugin(size_t index);
 
     GtkWidget* build_directories_tab();
     GtkWidget* build_sync_tab();
     GtkWidget* build_status_tab();
     GtkWidget* build_settings_tab();
     GtkWidget* build_blacklist_tab();
+    GtkWidget* build_plugins_tab();
 };

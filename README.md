@@ -24,12 +24,14 @@ For the full technical analysis see [readme-fixes.md](readme-fixes.md).
 
 The upstream yabridgectl management tool is command-line only. vstbridge adds a GTK3 graphical interface (`vstbridgectl-gtk`) for users who prefer not to use the terminal.
 
-The GUI has four tabs:
+The GUI has these tabs:
 
 - **Directories** — add and remove the directories vstbridge scans for Windows plugins
 - **Sync** — run a sync with options for force, prune, verbose output, and skipping the compatibility check; live output is shown in the window
 - **Status** — show the current vstbridge installation status and detected Wine version
 - **Settings** — set the vstbridge installation path, choose between centralized and inline VST2 install modes, and toggle the Wine/vstbridge compatibility check
+- **Blacklist** — exclude paths from the plugin scan
+- **Plugins** — change per-plugin settings, such as Wine DLL overrides and editor options, without editing `vstbridge.toml` by hand
 
 ---
 
@@ -111,6 +113,19 @@ Shows the currently installed vstbridge version, the detected Wine version, and 
 The vstbridge path is pre-configured to `~/.local/share/vstbridge` by the installer and does not need to be changed. You would only use this tab if you have moved the bridge files to a different location.
 
 VST2 plugins are installed in centralized mode — vstbridgectl creates `~/.vst/vstbridge/` and mirrors your plugin directory structure inside it, placing the bridge `.so` alongside a copy of the Windows `.dll`. For example, a plugin at `~/.wine/drive_c/Program Files/VstPlugins/Toontrack/Superior Drummer.dll` becomes `~/.vst/vstbridge/Toontrack/Superior Drummer.so`.
+
+### Plugins tab
+
+Lists every plugin found in your plugin directories. Double-click a plugin, or select it and click **Configure...**, to change its settings:
+
+- the plugin group
+- the editor and compatibility options
+- the editor frame rate
+- extra Wine environment variables, one `KEY=VALUE` per line, for example `WINEDLLOVERRIDES=d3d11,dxgi=n,b`
+
+These are the same options described under [Configuration](#configuration).
+
+The settings are saved as a section for that plugin in the `vstbridge.toml` that vstbridge reads for it, usually `~/.vst3/vstbridge/vstbridge.toml` (or `~/.vst/…`, `~/.clap/…`). The rest of the file, including comments, is left untouched. The section is placed above any broader patterns so it takes precedence. **Reset to Defaults** removes the section again. Plugins with their own section are marked "custom settings" in the list. Changes apply the next time the plugin is loaded.
 
 ### Configuring your DAW
 

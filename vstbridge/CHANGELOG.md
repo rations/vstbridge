@@ -14,6 +14,10 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   variables for a plugin's Wine host process, such as per-plugin
   `WINEDLLOVERRIDES`, so plugins with different requirements can share one Wine
   prefix. The variables are also shown in the startup log.
+- Added a Plugins tab to vstbridgectl-gtk for editing a plugin's
+  `vstbridge.toml` settings, including the new `environment` option, without
+  using the terminal. It only rewrites that plugin's section, so comments and
+  other sections are kept.
 - Added support for aarch64 Linux, such as the Raspberry Pi 5. The native
   plugin libraries and vstbridgectl build for aarch64. Windows plugins run
   through Wine's ARM64EC support with FEX for x86 emulation. ARM64 plugin DLLs

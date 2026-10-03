@@ -35,7 +35,8 @@ SRCS := \
 	src/symbols.cpp \
 	src/vst3_moduleinfo.cpp \
 	src/actions.cpp \
-	src/actions/blacklist.cpp
+	src/actions/blacklist.cpp \
+	src/plugin_config.cpp
 
 OBJS := $(patsubst src/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
@@ -53,7 +54,8 @@ GUI_OBJS := \
 	$(BUILD_DIR)/symbols.o \
 	$(BUILD_DIR)/vst3_moduleinfo.o \
 	$(BUILD_DIR)/actions.o \
-	$(BUILD_DIR)/actions/blacklist.o
+	$(BUILD_DIR)/actions/blacklist.o \
+	$(BUILD_DIR)/plugin_config.o
 
 GUI_TARGET := $(BUILD_DIR)/vstbridgectl-gtk
 
