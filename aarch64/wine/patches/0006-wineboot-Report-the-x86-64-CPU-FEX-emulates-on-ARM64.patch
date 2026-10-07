@@ -1,0 +1,41 @@
+From 380ff31ce2ee9ada1d6258bb2cc55f8d55bcb5f7 Mon Sep 17 00:00:00 2001
+From: rations <ehqcar@proton.me>
+Date: Wed, 7 Oct 2026 12:35:25 +1000
+Subject: [PATCH] wineboot: Report the x86-64 CPU FEX emulates on ARM64.
+
+On ARM64, Pivuan runs x86-64 Windows programs and plugins through FEX (vstbridge's plugin host
+is ARM64EC). Installers that check HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0 for an
+ARM CPU then install their ARM64 files, which those x86-64 programs can't load. iLok's PACE
+License Support does this: its ARM64 fusionfactory_shared.dll is plain ARM64, not ARM64X, so
+iLok License Manager, PACE License Services and iLok-protected plugins, all x86-64, can't use it.
+
+Report the CPU FEX shows x86-64 code through CPUID instead (GenuineIntel, family 6, model 166,
+stepping 1) as the processor's Identifier and VendorIdentifier, and so in PROCESSOR_IDENTIFIER.
+PROCESSOR_ARCHITECTURE stays ARM64. This is for Pivuan's wine-fex, not for upstream.
+---
+ programs/wineboot/wineboot.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/programs/wineboot/wineboot.c b/programs/wineboot/wineboot.c
+index b49ad3c..9603585 100644
+--- a/programs/wineboot/wineboot.c
++++ b/programs/wineboot/wineboot.c
+@@ -707,8 +707,13 @@ static void create_bios_processor_values( HKEY system_key, const char *buf, UINT
+             break;
+         case PROCESSOR_ARCHITECTURE_ARM64:
+             arch = L"ARM64";
+-            swprintf( id, ARRAY_SIZE(id), L"ARMv8 (64-bit) Family 8 Model %X Revision %X",
+-                      sci.ProcessorLevel, sci.ProcessorRevision );
++            /* The Windows programs and plugins run here are x86-64 ones, run through FEX, so this
++             * is the CPU FEX shows them (its CPUID: GenuineIntel, family 6, model 166, stepping 1).
++             * Installers that look for "ARM" here (iLok's does) would otherwise install their ARM64
++             * files, which x86-64 programs can't load. */
++            lstrcpynW( id, L"Intel64 Family 6 Model 166 Stepping 1", ARRAY_SIZE(id) );
++            free( vendorid );
++            vendorid = wcsdup( L"GenuineIntel" );
+             break;
+         case PROCESSOR_ARCHITECTURE_AMD64:
+             arch = L"AMD64";
+-- 
+2.47.3
+

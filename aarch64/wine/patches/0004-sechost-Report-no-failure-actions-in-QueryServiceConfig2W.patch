@@ -1,0 +1,63 @@
+From 16cbd3ed514823a4edf5f89f9dd83d29ecb1bb32 Mon Sep 17 00:00:00 2001
+From: rations <ehqcar@proton.me>
+Date: Wed, 7 Oct 2026 12:34:24 +1000
+Subject: [PATCH] sechost: Report no failure actions in QueryServiceConfig2W.
+
+services.exe doesn't keep a service's failure actions: ChangeServiceConfig2W accepts them with a
+FIXME, but QueryServiceConfig2W failed with ERROR_INVALID_LEVEL. WiX's ServiceConfig custom action
+(Wix4ServiceConfig, used by iLok's PACE License Support installer) reads the current failure
+actions before it sets them, for its rollback, and fails the whole install when that query fails.
+
+For SERVICE_CONFIG_FAILURE_ACTIONS and SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, report what a
+service without failure actions reports on Windows: the structure, zeroed. The handle is checked
+with a SERVICE_CONFIG_PRESHUTDOWN_INFO query first, so an invalid handle or missing
+SERVICE_QUERY_CONFIG access still fails as before.
+---
+ dlls/sechost/service.c | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
+
+diff --git a/dlls/sechost/service.c b/dlls/sechost/service.c
+index f05fd2d..20a7fb1 100644
+--- a/dlls/sechost/service.c
++++ b/dlls/sechost/service.c
+@@ -844,6 +844,37 @@ BOOL WINAPI DECLSPEC_HOTPATCH QueryServiceConfig2W( SC_HANDLE service, DWORD lev
+         bufptr = buffer;
+         break;
+ 
++    /* services.exe doesn't keep failure actions (ChangeServiceConfig2W takes them with a FIXME),
++     * so a service has none: no reset period, command, reboot message or actions, and the flag is
++     * off. Installers made with WiX's ServiceConfig (iLok's, for one) read them before setting
++     * them, and fail the install when the query fails. The service handle is still checked, by
++     * a query services.exe does answer. */
++    case SERVICE_CONFIG_FAILURE_ACTIONS:
++    case SERVICE_CONFIG_FAILURE_ACTIONS_FLAG:
++    {
++        DWORD needed = level == SERVICE_CONFIG_FAILURE_ACTIONS ? sizeof(SERVICE_FAILURE_ACTIONSW)
++                                                               : sizeof(SERVICE_FAILURE_ACTIONS_FLAG);
++        SERVICE_PRESHUTDOWN_INFO preshutdown;
++        DWORD preshutdown_size;
++
++        if (!QueryServiceConfig2W( service, SERVICE_CONFIG_PRESHUTDOWN_INFO, (BYTE *)&preshutdown,
++                                   sizeof(preshutdown), &preshutdown_size ))
++            return FALSE;
++        if (!ret_size)
++        {
++            SetLastError( ERROR_INVALID_ADDRESS );
++            return FALSE;
++        }
++        *ret_size = needed;
++        if (size < needed)
++        {
++            SetLastError( ERROR_INSUFFICIENT_BUFFER );
++            return FALSE;
++        }
++        memset( buffer, 0, needed );
++        return TRUE;
++    }
++
+     default:
+         FIXME("Level %ld not implemented\n", level);
+         SetLastError(ERROR_INVALID_LEVEL);
+-- 
+2.47.3
+
