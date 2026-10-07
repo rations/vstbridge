@@ -1,0 +1,110 @@
+From b9df08531f5ecb76e467497eb8da73eecb5d1144 Mon Sep 17 00:00:00 2001
+From: rations <ehqcar@proton.me>
+Date: Wed, 7 Oct 2026 12:34:45 +1000
+Subject: [PATCH] msiexec, rundll32: Declare Windows 10 compatibility in their
+ manifests.
+
+Windows 8.1 and later report Windows 8 (6.2) to a program whose manifest doesn't list the newer
+versions under supportedOS, and Wine does the same (init_current_version in kernelbase). The
+program here is the process an MSI custom action runs in: Wine's msiexec.exe (the custom action
+server), or rundll32.exe for WiX's managed (.NET) custom actions, which run out of process. Wine's
+manifests have no compatibility section, so custom actions saw Windows 8 in a Windows 10 prefix.
+Windows' own msiexec.exe and rundll32.exe list every version up to Windows 10.
+
+iLok's PACE License Support installer checks for Windows 10 in such a custom action
+(SetCompatibleOSVersion) and refuses to install otherwise. Add the same supportedOS list to
+msiexec.manifest, and give rundll32.exe a manifest with it.
+---
+ programs/msiexec/msiexec.manifest   | 10 ++++++++++
+ programs/rundll32/Makefile.in       |  1 +
+ programs/rundll32/rsrc.rc           | 25 +++++++++++++++++++++++++
+ programs/rundll32/rundll32.manifest | 14 ++++++++++++++
+ 4 files changed, 50 insertions(+)
+ create mode 100644 programs/rundll32/rsrc.rc
+ create mode 100644 programs/rundll32/rundll32.manifest
+
+diff --git a/programs/msiexec/msiexec.manifest b/programs/msiexec/msiexec.manifest
+index 0e34545..85d1502 100644
+--- a/programs/msiexec/msiexec.manifest
++++ b/programs/msiexec/msiexec.manifest
+@@ -13,6 +13,16 @@
+         />
+     </dependentAssembly>
+ </dependency>
++<compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
++    <application>
++        <!-- Windows Vista, 7, 8, 8.1 and 10 -->
++        <supportedOS Id="{e2011457-1546-43c5-a5fe-008deee3d3f0}"/>
++        <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
++        <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
++        <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
++        <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
++    </application>
++</compatibility>
+ <application xmlns="urn:schemas-microsoft-com:asm.v3">
+     <windowsSettings>
+         <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
+diff --git a/programs/rundll32/Makefile.in b/programs/rundll32/Makefile.in
+index f2aa974..5ae53c1 100644
+--- a/programs/rundll32/Makefile.in
++++ b/programs/rundll32/Makefile.in
+@@ -4,4 +4,5 @@ IMPORTS   = user32 kernelbase
+ EXTRADLLFLAGS = -mwindows -municode
+ 
+ SOURCES = \
++	rsrc.rc \
+ 	rundll32.c
+diff --git a/programs/rundll32/rsrc.rc b/programs/rundll32/rsrc.rc
+new file mode 100644
+index 0000000..7607583
+--- /dev/null
++++ b/programs/rundll32/rsrc.rc
+@@ -0,0 +1,25 @@
++/*
++ * Copyright (c) 2026 rations
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <windows.h>
++
++#include <windows.h>
++
++LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
++
++1 RT_MANIFEST rundll32.manifest
+diff --git a/programs/rundll32/rundll32.manifest b/programs/rundll32/rundll32.manifest
+new file mode 100644
+index 0000000..07b215a
+--- /dev/null
++++ b/programs/rundll32/rundll32.manifest
+@@ -0,0 +1,14 @@
++<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
++<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
++<assemblyIdentity type="win32" name="Wine.Rundll32" version="0.0.0.0"/>
++<compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
++    <application>
++        <!-- Windows Vista, 7, 8, 8.1 and 10 -->
++        <supportedOS Id="{e2011457-1546-43c5-a5fe-008deee3d3f0}"/>
++        <supportedOS Id="{35138b9a-5d96-4fbd-8e2d-a2440225f93a}"/>
++        <supportedOS Id="{4a2f28e3-53b9-4441-ba9c-d69d4a4a6e38}"/>
++        <supportedOS Id="{1f676c76-80e1-4239-95bb-83d0f6d0da78}"/>
++        <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
++    </application>
++</compatibility>
++</assembly>
+-- 
+2.47.3
+

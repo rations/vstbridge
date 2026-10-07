@@ -1,0 +1,78 @@
+From 322058764123dfbb93d5ff7268bac24cfc318961 Mon Sep 17 00:00:00 2001
+From: rations <ehqcar@proton.me>
+Date: Wed, 7 Oct 2026 12:26:39 +1000
+Subject: [PATCH] winemenubuilder: Move a user Desktop shortcut to the Public
+ Desktop once its launcher is written.
+
+Wine links the user's Desktop folder to the Unix desktop (XDG_DESKTOP_DIR),
+and winemenubuilder writes the desktop entry for a Desktop shortcut into
+that same folder. A shortcut an installer puts on the user's Desktop
+therefore shows twice on the Unix desktop: as its launcher, with the
+program's icon, and as the .lnk itself, a plain file next to it.
+
+File managers can't be told to hide the .lnk. GLib's .hidden file is not
+read by pcmanfm (libfm lists local folders itself and hides only names
+starting with a dot), so the shortcut has to leave the folder. Move it to
+the Public Desktop: Windows programs still find it on the desktop, which
+merges both folders, and the launcher runs the shortcut's target, not the
+shortcut. Shortcuts without a target path (the launcher runs the .lnk)
+and shortcuts in subfolders stay where they are. An uninstaller then finds
+no shortcut to delete, which they ignore.
+---
+ programs/winemenubuilder/winemenubuilder.c | 25 ++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/programs/winemenubuilder/winemenubuilder.c b/programs/winemenubuilder/winemenubuilder.c
+index 553a47b..9bb4563 100644
+--- a/programs/winemenubuilder/winemenubuilder.c
++++ b/programs/winemenubuilder/winemenubuilder.c
+@@ -2212,6 +2212,26 @@ static BOOL generate_associations(const WCHAR *packages_dir, const WCHAR *applic
+     return hasChanged;
+ }
+ 
++/* A shortcut right in the user's Desktop folder is in the folder its desktop entry is written
++ * to (Wine links that folder to the Unix desktop), so desktops would show it too, as a plain
++ * file next to its launcher. File managers can't be told to hide it (some only hide names that
++ * start with a dot), so it is moved to the Public Desktop, which Windows shows on the desktop
++ * too and which isn't on the Unix desktop. The launcher runs the shortcut's target, not the
++ * shortcut, so it keeps working. */
++static void move_desktop_link( LPCWSTR link, DWORD csidl, const WCHAR *link_name )
++{
++    WCHAR filename[MAX_PATH], public[MAX_PATH], *dest;
++
++    if (csidl != CSIDL_DESKTOPDIRECTORY || wcschr( link_name, '\\' )) return;
++    if (!SHGetSpecialFolderPathW( 0, public, CSIDL_COMMON_DESKTOPDIRECTORY, TRUE )) return;
++    if (!GetLongPathNameW( link, filename, MAX_PATH )) lstrcpynW( filename, link, MAX_PATH );
++    dest = heap_wprintf( L"%s\\%s", public, PathFindFileNameW( filename ) );
++    if (!MoveFileExW( filename, dest, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED ))
++        WINE_WARN( "can't move %s to %s: %lu\n", wine_dbgstr_w(filename), wine_dbgstr_w(dest),
++                   GetLastError() );
++    free( dest );
++}
++
+ static BOOL InvokeShellLinker( IShellLinkW *sl, LPCWSTR link, BOOL bWait )
+ {
+     WCHAR *icon_name, *link_name;
+@@ -2317,6 +2337,8 @@ static BOOL InvokeShellLinker( IShellLinkW *sl, LPCWSTR link, BOOL bWait )
+         else
+             r = !write_desktop_entry(NULL, NULL, link_name, szPath, szArgs,
+                                      szDescription, szWorkDir, icon_name, szWMClass);
++        /* without a target path, the launcher runs the shortcut itself, which stays */
++        if (!r && szPath[0]) move_desktop_link( link, csidl, link_name );
+     }
+     else
+         r = !write_menu_entry(link, link_name, link, NULL, szDescription, szWorkDir, icon_name, szWMClass);
+@@ -2425,7 +2447,10 @@ static BOOL InvokeShellLinkerForURL( IUniformResourceLocatorW *url, LPCWSTR link
+         goto cleanup;
+     }
+     if (in_desktop_dir(csidl))
++    {
+         r = !write_desktop_entry(NULL, NULL, link_name, L"start.exe", urlPath, NULL, NULL, icon_name, NULL);
++        if (!r) move_desktop_link( link, csidl, link_name );
++    }
+     else
+         r = !write_menu_entry(link, link_name, L"start.exe", urlPath, NULL, NULL, icon_name, NULL);
+     ret = (r == 0);
+-- 
+2.47.3
+

@@ -17,6 +17,18 @@ through Wine's ARM64EC support and FEX's `libarm64ecfex.dll`.
     paint one frame and stop responding unless DXVK is installed.
   - `0002`: new prefixes use FEX for x86_64 and i386 code (the `HKLM\Software\Microsoft\Wow64`
     keys), as Proton's Wine does. Upstream points them at stubs.
+  - `0003`: a shortcut an installer puts on the user's Desktop moves to the Public Desktop once
+    winemenubuilder has written its launcher. Wine's Desktop folder is the Linux desktop, so
+    the `.lnk` would otherwise show next to its launcher as a plain file.
+  - `0004`: `QueryServiceConfig2W` reports a service's failure actions (none) instead of failing.
+    Installers made with WiX's ServiceConfig, such as iLok's, read them before setting them.
+  - `0005`: `msiexec.exe` and `rundll32.exe` declare Windows 10 compatibility in their manifests,
+    as on Windows. MSI custom actions run in them, and without it they see Windows 8 in a
+    Windows 10 prefix. iLok's installer refuses to install below Windows 10.
+  - `0006`: on ARM64, the prefix reports the x86-64 CPU FEX emulates (GenuineIntel) in
+    `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor`. The Windows programs and plugins run here
+    are x86-64, and installers that find an ARM CPU there (iLok's) install ARM64 files they can't
+    load.
 
 - `build-debs.sh`: packages everything for the Pivuan apt repository (below).
 
