@@ -516,7 +516,12 @@ void Editor::resize(uint16_t width, uint16_t height) {
         logger_.log_editor_trace([]() {
             return "DEBUG: Resetting Wine window position back to (0, 0)";
         });
-        SetWindowPos(win32_window_.handle_, nullptr, 0, 0, 0, 0,
+        // Win32 coordinates are X root coordinates plus the virtual screen's
+        // origin (Wine's `root_to_virtual_screen()`), which is not (0, 0)
+        // when the primary monitor isn't the left/topmost one.
+        SetWindowPos(win32_window_.handle_, nullptr,
+                     GetSystemMetrics(SM_XVIRTUALSCREEN),
+                     GetSystemMetrics(SM_YVIRTUALSCREEN), 0, 0,
                      SWP_NOSIZE | SWP_NOREDRAW | SWP_NOACTIVATE |
                          SWP_NOOWNERZORDER | SWP_DEFERERASE | SWP_NOCOPYBITS);
 
@@ -900,7 +905,17 @@ void Editor::fix_local_coordinates() const {
         // SetWindowPos directly so Wine's screen_to_client() translates click
         // coordinates correctly. The embedded-window guard in window_set_config
         // ensures Wine won't actually move the X11 window.
-        SetWindowPos(win32_window_.handle_, nullptr, abs_x, abs_y, 0, 0,
+        //
+        // `abs_x`/`abs_y` are X root coordinates, SetWindowPos wants Win32
+        // virtual screen coordinates: the same point offset by the virtual
+        // screen's origin. That origin is non-zero whenever Wine's primary
+        // monitor has other monitors to its left/above, e.g. a primary
+        // external display with the laptop panel to its left, where without
+        // this the window's idea of its position was off by the width of
+        // that panel and the editor could not be clicked at all.
+        SetWindowPos(win32_window_.handle_, nullptr,
+                     abs_x + GetSystemMetrics(SM_XVIRTUALSCREEN),
+                     abs_y + GetSystemMetrics(SM_YVIRTUALSCREEN), 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW |
                          SWP_NOSENDCHANGING);
         return;
