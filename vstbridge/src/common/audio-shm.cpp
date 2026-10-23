@@ -25,6 +25,13 @@
 
 using namespace std::literals::string_literals;
 
+/**
+ * The number of zeroed bytes mapped behind the audio data, see
+ * `AudioShmBuffer::setup_mapping()`. A full page is used so this is at least as
+ * large as the page size on any system vstbridge runs on.
+ */
+static constexpr size_t audio_shm_padding_bytes = 4096;
+
 namespace {
 
 void log_memlock_warning() {
@@ -86,7 +93,7 @@ AudioShmBuffer::~AudioShmBuffer() noexcept {
     // removed, so we'll do it on both sides to reduce the chance that we leak
     // shared memory
     if (!is_moved_) {
-        munmap(shm_bytes_, config_.size);
+        munmap(shm_bytes_, shm_size_);
         close(shm_fd_);
         shm_unlink(config_.name.c_str());
     }
@@ -124,8 +131,13 @@ void AudioShmBuffer::resize(const Config& new_config) {
 
 #ifdef VSTBRIDGE_PE_HOST
 void AudioShmBuffer::setup_mapping() {
+    // The same padding as below. Both sides truncate the object to this size,
+    // so it has to match the native plugin's.
+    const size_t mapped_size =
+        config_.size > 0 ? config_.size + audio_shm_padding_bytes : 0;
+
     unixlib::ShmMapArgs args{.fd = shm_fd_,
-                             .size = config_.size,
+                             .size = mapped_size,
                              .old_address = shm_bytes_,
                              .old_size = shm_size_};
     unixlib::call(unixlib::shm_map, &args);
@@ -139,15 +151,26 @@ void AudioShmBuffer::setup_mapping() {
     }
 
     shm_bytes_ = static_cast<uint8_t*>(args.address);
-    shm_size_ = config_.size;
+    shm_size_ = mapped_size;
 }
 #else
 void AudioShmBuffer::setup_mapping() {
     // Apparently you get a `Resource temporarily unavailable` when calling
     // `ftruncate()` with a size of 0 on shared memory
     if (config_.size > 0) {
+        // Some plugins read one sample past the end of their last audio
+        // channel (for example a NaN check on `buffer[n]` instead of
+        // `buffer[n - 1]`). On Windows that lands in heap slack, but our
+        // buffers are sized exactly and audio block sizes are normally a power
+        // of two, so the mapping ends on a page boundary and that read faults
+        // whenever the following page happens to be unmapped. Keep a zeroed
+        // page of slack behind the audio data so those reads stay harmless.
+        // The file has to be truncated to include the padding, since mapping
+        // past the end of a shared memory object results in SIGBUS.
+        const size_t mapped_size = config_.size + audio_shm_padding_bytes;
+
         // I don't think this can fail
-        assert(ftruncate(shm_fd_, config_.size) == 0);
+        assert(ftruncate(shm_fd_, mapped_size) == 0);
 
         // But this can, if the user does not have permissions to use (enough)
         // locked emmory, we'll try it without locking memory and show a big
@@ -155,8 +178,8 @@ void AudioShmBuffer::setup_mapping() {
         uint8_t* old_shm_bytes = shm_bytes_;
         shm_bytes_ = static_cast<uint8_t*>(
             old_shm_bytes
-                ? mremap(old_shm_bytes, shm_size_, config_.size, MREMAP_MAYMOVE)
-                : mmap(nullptr, config_.size, PROT_READ | PROT_WRITE,
+                ? mremap(old_shm_bytes, shm_size_, mapped_size, MREMAP_MAYMOVE)
+                : mmap(nullptr, mapped_size, PROT_READ | PROT_WRITE,
                        MAP_SHARED | MAP_LOCKED, shm_fd_, 0));
         if (shm_bytes_ == MAP_FAILED) {
             log_memlock_warning();
@@ -166,7 +189,7 @@ void AudioShmBuffer::setup_mapping() {
             if (old_shm_bytes) {
                 assert(munmap(old_shm_bytes, shm_size_) == 0);
             }
-            shm_bytes_ = static_cast<uint8_t*>(mmap(nullptr, config_.size,
+            shm_bytes_ = static_cast<uint8_t*>(mmap(nullptr, mapped_size,
                                                     PROT_READ | PROT_WRITE,
                                                     MAP_SHARED, shm_fd_, 0));
             if (shm_bytes_ == MAP_FAILED) {
@@ -177,6 +200,8 @@ void AudioShmBuffer::setup_mapping() {
         }
     }
 
-    shm_size_ = config_.size;
+    // This includes the padding, so that `mremap()` and `munmap()` operate on
+    // the full mapping. It stays 0 if nothing has been mapped.
+    shm_size_ = config_.size > 0 ? config_.size + audio_shm_padding_bytes : 0;
 }
 #endif
