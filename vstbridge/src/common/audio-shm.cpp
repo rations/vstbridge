@@ -16,6 +16,7 @@
 
 #include "audio-shm.h"
 
+#include <cstring>
 #include <iostream>
 
 #include "logging/common.h"
@@ -154,6 +155,11 @@ void AudioShmBuffer::setup_mapping() {
 
     shm_bytes_ = static_cast<uint8_t*>(args.address);
     shm_size_ = mapped_size;
+
+    // See below
+    if (mapped_size > 0) {
+        std::memset(shm_bytes_ + config_.size, 0, audio_shm_padding_bytes);
+    }
 }
 #else
 void AudioShmBuffer::setup_mapping() {
@@ -206,5 +212,12 @@ void AudioShmBuffer::setup_mapping() {
     // This includes the padding, so that `mremap()` and `munmap()` operate on
     // the full mapping
     shm_size_ = mapped_size;
+
+    // `ftruncate()` only zeroes pages the object grows into. After shrinking,
+    // the padding still holds the old audio data that was there, so we'll
+    // clear it explicitly.
+    if (mapped_size > 0) {
+        std::memset(shm_bytes_ + config_.size, 0, audio_shm_padding_bytes);
+    }
 }
 #endif
