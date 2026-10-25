@@ -27,8 +27,10 @@ using namespace std::literals::string_literals;
 
 /**
  * The number of zeroed bytes mapped behind the audio data, see
- * `AudioShmBuffer::setup_mapping()`. A full page is used so this is at least as
- * large as the page size on any system vstbridge runs on.
+ * `AudioShmBuffer::setup_mapping()`. Only a few bytes are needed to cover a
+ * one-sample over-read. This is the smallest page size we run on. With larger
+ * pages (16 KiB/64 KiB aarch64 kernels) the mapping is rounded up to a whole
+ * page, and the page holding the end of the object stays readable.
  */
 static constexpr size_t audio_shm_padding_bytes = 4096;
 
@@ -155,20 +157,21 @@ void AudioShmBuffer::setup_mapping() {
 }
 #else
 void AudioShmBuffer::setup_mapping() {
+    // Some plugins read one sample past the end of their last audio channel
+    // (for example a NaN check on `buffer[n]` instead of `buffer[n - 1]`). On
+    // Windows that lands in heap slack, but our buffers are sized exactly and
+    // audio block sizes are normally a power of two, so the mapping ends on a
+    // page boundary and that read faults whenever the following page happens
+    // to be unmapped. Keep a zeroed page of slack behind the audio data so
+    // those reads stay harmless. The file has to be truncated to include the
+    // padding, since mapping past the end of a shared memory object results in
+    // SIGBUS.
+    const size_t mapped_size =
+        config_.size > 0 ? config_.size + audio_shm_padding_bytes : 0;
+
     // Apparently you get a `Resource temporarily unavailable` when calling
     // `ftruncate()` with a size of 0 on shared memory
     if (config_.size > 0) {
-        // Some plugins read one sample past the end of their last audio
-        // channel (for example a NaN check on `buffer[n]` instead of
-        // `buffer[n - 1]`). On Windows that lands in heap slack, but our
-        // buffers are sized exactly and audio block sizes are normally a power
-        // of two, so the mapping ends on a page boundary and that read faults
-        // whenever the following page happens to be unmapped. Keep a zeroed
-        // page of slack behind the audio data so those reads stay harmless.
-        // The file has to be truncated to include the padding, since mapping
-        // past the end of a shared memory object results in SIGBUS.
-        const size_t mapped_size = config_.size + audio_shm_padding_bytes;
-
         // I don't think this can fail
         assert(ftruncate(shm_fd_, mapped_size) == 0);
 
@@ -201,7 +204,7 @@ void AudioShmBuffer::setup_mapping() {
     }
 
     // This includes the padding, so that `mremap()` and `munmap()` operate on
-    // the full mapping. It stays 0 if nothing has been mapped.
-    shm_size_ = config_.size > 0 ? config_.size + audio_shm_padding_bytes : 0;
+    // the full mapping
+    shm_size_ = mapped_size;
 }
 #endif
