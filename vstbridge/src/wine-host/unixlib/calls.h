@@ -38,17 +38,29 @@
 // true: libxcb's and `mmap()`'s memory lives above that, so those are copied
 // or mapped into memory allocated on the PE side instead (see `xcb-calls.h`
 // and `ShmMapArgs`).
+//
+// A Wine that still has its 32-bit Unix side (`i386-unix`, as in WineHQ's
+// packages) runs the 32-bit host in an i386 Linux process instead, which can't
+// load the 64-bit unixlib. That process loads the i386 build of the unixlib
+// (`vstbridge-host-32-unixlib-i386.so`) through `__wine_unix_call_funcs`, so
+// 64-bit fields use `aligned_uint64_t` to keep the layout the same there too.
 
 #include <stdint.h>
 
 namespace unixlib {
 
 /**
+ * A `uint64_t` with the 8-byte alignment it has on Windows. i386 Linux only
+ * aligns 64-bit integers in structs to 4 bytes.
+ */
+typedef uint64_t aligned_uint64_t __attribute__((aligned(8)));
+
+/**
  * A pointer stored as 64 bits on both sides.
  */
 template <typename T>
 struct ptr64 {
-    uint64_t value = 0;
+    aligned_uint64_t value = 0;
 
     ptr64() = default;
     // NOLINTNEXTLINE(google-explicit-constructor)
@@ -116,9 +128,9 @@ struct ReadWriteArgs {
     int32_t fd;
     int32_t error;
     ptr64<void> buffer;
-    uint64_t size;
+    aligned_uint64_t size;
     // The number of bytes read or written. 0 on end of file for reads.
-    uint64_t result;
+    aligned_uint64_t result;
 };
 
 struct FdArgs {
@@ -141,11 +153,11 @@ struct SocketListeningArgs {
 struct ShmMapArgs {
     int32_t fd;
     int32_t error;
-    uint64_t size;
+    aligned_uint64_t size;
     // The existing mapping to grow or shrink, or null. Not used together with
     // `fixed_address`.
     ptr64<void> old_address;
-    uint64_t old_size;
+    aligned_uint64_t old_size;
     // If set, map the object over this PE-side allocation of `size` bytes
     // instead of wherever `mmap()` puts it. The 32-bit host needs this since
     // it can only address the low 4 GiB.
@@ -162,7 +174,7 @@ struct ShmDestroyArgs {
     // Unmapped if set. A `fixed_address` mapping is instead released by the PE
     // side, since Wine still considers that memory its own.
     ptr64<void> address;
-    uint64_t size;
+    aligned_uint64_t size;
 };
 
 struct ProcessArgs {
@@ -182,7 +194,7 @@ struct RealtimePriorityArgs {
 };
 
 // The layouts have to be the same in the 32-bit PE host, the 64-bit one, and
-// the unixlib
+// both unixlibs
 static_assert(sizeof(PathFdArgs) == 16);
 static_assert(sizeof(AcceptArgs) == 12);
 static_assert(sizeof(ReadWriteArgs) == 32);

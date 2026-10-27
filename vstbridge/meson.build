@@ -506,6 +506,20 @@ if with_pe_host
     dependencies : [xcb_native_dep],
     cpp_args : compiler_options,
   )
+  # The 32-bit host also needs an i386 unixlib for Wine builds that still have a
+  # 32-bit Unix side, where it doesn't run in a 64-bit process. libxcb's headers
+  # are the same, but it has to link to the i386 library.
+  if with_32bit_pe_host
+    shared_library(
+      pe_host_name + '-unixlib-i386',
+      unixlib_sources,
+      native : true,
+      name_prefix : '',
+      dependencies : [xcb_native_dep.partial_dependency(compile_args : true, includes : true)],
+      cpp_args : compiler_options + ['-m32'],
+      link_args : ['-m32', '-lxcb'],
+    )
+  endif
 endif
 
 if with_bitbridge

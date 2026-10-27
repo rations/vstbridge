@@ -15,6 +15,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "pe.h"
 
@@ -125,32 +127,46 @@ std::optional<std::string> init() {
         exe_path.resize(exe_path.size() - 4);
     }
 
-    // `load_unixlib_by_name()` in `wine/dlls/ntdll/unix/loader.c` treats names
-    // containing a path separator as an NT path
-    std::wstring nt_path = L"\\??\\" + exe_path + L"-unixlib.so";
-    UNICODE_STRING name;
-    name.Buffer = nt_path.data();
-    name.Length = name.MaximumLength =
-        static_cast<USHORT>(nt_path.size() * sizeof(wchar_t));
+    // A 32-bit host runs in a 64-bit Linux process on a WoW64 Wine, and in an
+    // i386 one on a Wine with a 32-bit Unix side. Only the matching unixlib
+    // can be loaded, so the 32-bit host tries both. See `calls.h`.
+    std::vector<std::wstring> suffixes{L"-unixlib.so"};
+    if constexpr (sizeof(void*) == 4) {
+        suffixes.push_back(L"-unixlib-i386.so");
+    }
 
-    // `Result[0]` is the `dlopen()` handle, and `Result[1]` the handle passed
-    // to the dispatcher
-    uint64_t result[2]{};
-    const NTSTATUS status = nt_query_virtual_memory(
-        GetCurrentProcess(), &name, MemoryWineLoadUnixLibByName, result,
-        sizeof(result), nullptr);
-    if (status != 0) {
+    std::string errors;
+    for (const auto& suffix : suffixes) {
+        // `load_unixlib_by_name()` in `wine/dlls/ntdll/unix/loader.c` treats
+        // names containing a path separator as an NT path
+        std::wstring nt_path = L"\\??\\" + exe_path + suffix;
+        UNICODE_STRING name;
+        name.Buffer = nt_path.data();
+        name.Length = name.MaximumLength =
+            static_cast<USHORT>(nt_path.size() * sizeof(wchar_t));
+
+        // `Result[0]` is the `dlopen()` handle, and `Result[1]` the handle
+        // passed to the dispatcher
+        uint64_t result[2]{};
+        const NTSTATUS status = nt_query_virtual_memory(
+            GetCurrentProcess(), &name, MemoryWineLoadUnixLibByName, result,
+            sizeof(result), nullptr);
+        if (status == 0) {
+            unixlib_handle = result[1];
+            return std::nullopt;
+        }
+
         char message[64];
         snprintf(message, sizeof(message), "status 0x%08lx",
                  static_cast<unsigned long>(status));
 
         const std::string path(nt_path.begin(), nt_path.end());
-        return "Could not load the unixlib at '" + path + "' (" + message +
-               "). This needs Wine 11.2 or newer.";
+        errors += (errors.empty() ? "" : ", ") + ("'" + path + "' (") +
+                  message + ")";
     }
 
-    unixlib_handle = result[1];
-    return std::nullopt;
+    return "Could not load the unixlib at " + errors +
+           ". This needs Wine 11.2 or newer.";
 }
 
 void call(Call code, void* args) {

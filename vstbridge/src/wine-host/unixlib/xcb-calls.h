@@ -29,6 +29,8 @@
 
 #include <stdint.h>
 
+#include "calls.h"
+
 namespace unixlib {
 
 enum XcbOp : uint32_t {
@@ -89,20 +91,20 @@ struct XcbArgs {
     // The function's arguments in order. Pointers are passed as is, since both
     // sides share the address space. `xcb_connection_t*` is the exception, see
     // `xcb-thunks.cpp`.
-    uint64_t args[13];
+    aligned_uint64_t args[13];
     // The return value. Cookies are returned as their sequence number and
     // pointers as the address.
-    uint64_t result;
+    aligned_uint64_t result;
 
     // For functions returning a reply or an event, the libxcb allocation and
     // its size in bytes. Set to 0 if there was no reply. Also used for
     // `xcb_op_get_setup`'s setup data, which isn't freed.
-    uint64_t packet;
-    uint64_t packet_size;
+    aligned_uint64_t packet;
+    aligned_uint64_t packet_size;
     // For functions that return an error through an `xcb_generic_error_t**` or
     // as their return value. The error is always `error_size` bytes.
-    uint64_t error;
-    uint64_t error_size;
+    aligned_uint64_t error;
+    aligned_uint64_t error_size;
 };
 
 // See `calls.h`
