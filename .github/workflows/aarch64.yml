@@ -12,7 +12,9 @@
 # - native: the plugin and chainloader libraries, vstbridgectl, and the plugin host. Wine does
 #   not support Winelib hosts on aarch64, so the host is an ARM64EC PE executable
 #   (-Dwine-host=pe, cross compiled with llvm-mingw) plus the native unixlib it uses for Linux
-#   APIs. Also the standalone vstbridge-aarch64.tar.gz, kept as a workflow artifact.
+#   APIs. The 32-bit host for 32-bit x86 plugins is an i686 PE executable, which Wine runs
+#   through WoW64 with FEX, with its own aarch64 unixlib. Also the standalone
+#   vstbridge-aarch64.tar.gz, kept as a workflow artifact.
 # - debs: wine-fex, wine-fex-i386, wine-fex-mono and vstbridge (aarch64/build-debs.sh)
 # - check: installs the packages in a clean trixie container and runs vstbridgectl sync, which
 #   creates a Wine prefix and starts the plugin host through Wine
@@ -222,6 +224,18 @@ jobs:
         working-directory: vstbridge
         run: ninja -C build
 
+      # 32-bit x86 plugins get their own host, an i686 PE program that Wine runs through WoW64
+      # with FEX (libwow64fex.dll). Its unixlib is built for aarch64, since Wine on aarch64
+      # always runs the 32-bit side in a 64-bit process. The native libraries above already
+      # start it as a PE program.
+      - name: Build the 32-bit plugin host
+        working-directory: vstbridge
+        run: |
+          meson setup build32 --buildtype=release \
+            -Dwine-host=pe --cross-file cross-mingw-i686.conf \
+            -Dwine-loader=/opt/vstbridge/wine/bin/wine
+          ninja -C build32
+
       - name: Build vstbridgectl
         working-directory: vstbridge/tools/vstbridgectl
         run: make -j"$(nproc)" WINE_LOADER=/opt/vstbridge/wine/bin/wine
@@ -231,6 +245,7 @@ jobs:
           set -eu
           fail=0
           for f in vstbridge/build/lib*.so vstbridge/build/vstbridge-host-unixlib.so \
+                   vstbridge/build32/vstbridge-host-32-unixlib.so \
                    vstbridge/tools/vstbridgectl/build/vstbridgectl*; do
             desc="$(file -b "$f")"
             echo "$f: $desc"
@@ -248,6 +263,14 @@ jobs:
             echo "::error::$host is not an ARM64EC executable"
             fail=1
           fi
+
+          host32=vstbridge/build32/vstbridge-host-32.exe
+          desc="$(file -b "$host32")"
+          echo "$host32: $desc"
+          case "$desc" in
+            "PE32 executable"*"Intel i386"*) ;;
+            *) echo "::error::$host32 is not a 32-bit x86 executable"; fail=1 ;;
+          esac
           exit "$fail"
 
       # The tarball holds a single `vstbridge` directory, so extracting it in ~/.local/share
@@ -259,6 +282,7 @@ jobs:
           mkdir -p "$dist"
           cp -a vstbridge/build/lib*.so vstbridge/build/vstbridge-host.exe \
             vstbridge/build/vstbridge-host-unixlib.so "$dist/"
+          cp -a vstbridge/build32/vstbridge-host-32.exe vstbridge/build32/vstbridge-host-32-unixlib.so "$dist/"
           cp -a vstbridge/tools/vstbridgectl/build/vstbridgectl vstbridge/tools/vstbridgectl/build/vstbridgectl-gtk "$dist/"
           cp -a vstbridge/install.sh vstbridge/uninstall.sh "$dist/"
           tar -C dist -czf dist/vstbridge-aarch64.tar.gz vstbridge
@@ -387,6 +411,14 @@ jobs:
             exit 1
           fi
           test -d "$HOME/.wine/drive_c/windows/mono"
+          # sync only runs the 64-bit host. The 32-bit one runs as an i386 program under FEX
+          # (libwow64fex.dll), and prints its usage once it has loaded its aarch64 unixlib.
+          wine /usr/lib/aarch64-linux-gnu/vstbridge-host-32.exe > "$HOME/host-32.log" 2>&1 || true
+          cat "$HOME/host-32.log"
+          if ! grep -q "Usage: vstbridge-host-32.exe" "$HOME/host-32.log"; then
+            echo "::error::the 32-bit plugin host did not start"
+            exit 1
+          fi
           wineserver -k || true
           EOF
           runuser -u pivuan -- env HOME=/home/pivuan bash -euxo pipefail /tmp/sync-check.sh

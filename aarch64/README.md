@@ -69,9 +69,9 @@ Pivuan Audio installs vstbridge from the Pivuan apt repository. `vstbridge` depe
 | Package | Contents |
 |---|---|
 | `wine-fex` | Wine and FEX in `/opt/vstbridge/wine`. `wine`, `winecfg` and Wine's other programs in `/usr/bin`. The "Wine Windows Program Loader" for opening `.exe` and `.msi` files, and Wine Configuration and Uninstall Windows Programs menu entries. |
-| `wine-fex-i386` | Wine's 32-bit Windows side, for 32-bit programs such as many installers. |
+| `wine-fex-i386` | Wine's 32-bit Windows side, for 32-bit programs such as many installers, and for 32-bit plugins. |
 | `wine-fex-mono` | The wine-mono installer, so creating a Wine prefix needs no download. |
-| `vstbridge` | The plugin libraries and the plugin host in `/usr/lib/aarch64-linux-gnu`, plus `vstbridgectl` and `vstbridgectl-gtk` in `/usr/bin`. |
+| `vstbridge` | The plugin libraries and the plugin hosts in `/usr/lib/aarch64-linux-gnu`, plus `vstbridgectl` and `vstbridgectl-gtk` in `/usr/bin`. `vstbridge-host.exe` (ARM64EC) loads 64-bit plugins. `vstbridge-host-32.exe` (i686, built with `cross-mingw-i686.conf`) loads 32-bit ones: Wine runs it through WoW64 with FEX's `libwow64fex.dll`, and its unixlib, `vstbridge-host-32-unixlib.so`, is built for aarch64. All of the 32-bit host's code is emulated, not only the plugin's as with ARM64EC. |
 
 - The Wine packages conflict with Debian's `wine`, because both install `/usr/bin/wine`.
 - The apt repository is a GitHub branch, and GitHub refuses files over 100 MiB. That's why Wine is

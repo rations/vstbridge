@@ -508,8 +508,9 @@ if with_pe_host
   )
   # The 32-bit host also needs an i386 unixlib for Wine builds that still have a
   # 32-bit Unix side, where it doesn't run in a 64-bit process. libxcb's headers
-  # are the same, but it has to link to the i386 library.
-  if with_32bit_pe_host
+  # are the same, but it has to link to the i386 library. Wine on aarch64 is
+  # always WoW64, so it only needs the unixlib above there.
+  if with_32bit_pe_host and build_machine.cpu_family() == 'x86_64'
     shared_library(
       pe_host_name + '-unixlib-i386',
       unixlib_sources,

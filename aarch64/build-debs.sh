@@ -290,10 +290,13 @@ libdir="$stage/usr/lib/$multiarch"
 install -d "$libdir" "$stage/usr/bin"
 for f in libvstbridge-vst2.so libvstbridge-vst3.so libvstbridge-clap.so \
          libvstbridge-chainloader-vst2.so libvstbridge-chainloader-vst3.so libvstbridge-chainloader-clap.so \
-         vstbridge-host-unixlib.so; do
+         vstbridge-host-unixlib.so vstbridge-host-32-unixlib.so; do
     install -m 0644 "$from/$f" "$libdir/$f"
 done
-install -m 0755 "$from/vstbridge-host.exe" "$libdir/vstbridge-host.exe"
+# vstbridge-host-32.exe is the host for 32-bit x86 plugins (i686, run through WoW64 with FEX)
+for f in vstbridge-host.exe vstbridge-host-32.exe; do
+    install -m 0755 "$from/$f" "$libdir/$f"
+done
 install -m 0755 "$from/vstbridgectl" "$from/vstbridgectl-gtk" "$stage/usr/bin/"
 install -Dm 0644 "$here/../vstbridge/tools/vstbridgectl/vstbridgectl-gtk.desktop" \
     "$stage/usr/share/applications/vstbridgectl-gtk.desktop"
