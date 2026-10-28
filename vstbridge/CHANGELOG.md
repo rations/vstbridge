@@ -8,19 +8,14 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-28
+
 ### Added
 
 - 32-bit plugins on aarch64. The 32-bit PE host is built for i686 and runs
   through Wine's WoW64 support with FEX (`libwow64fex.dll`), with its unixlib
   built for aarch64. The `vstbridge` package installs it, and the aarch64 CI
   checks that it starts.
-
-### Changed
-
-- The aarch64 Wine build (wine-fex) is wine-staging 11.20. Its patch for the
-  Raspberry Pi's GPU is gone, since Wine 11.20 fixes that hang itself.
-
-## [0.0.4] - 2026-10-28
 
 ### Fixed
 
@@ -39,6 +34,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `install.sh` removes the old 32-bit Winelib host, `vstbridge-host-32.exe.so`,
   when it installs the new one.
+- The aarch64 Wine build (wine-fex) is wine-staging 11.20. Its patch for the
+  Raspberry Pi's GPU is gone, since Wine 11.20 fixes that hang itself.
 
 ## [0.0.3] - 2026-10-21
 
