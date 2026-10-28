@@ -29,6 +29,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   WoW64 support by mgnsk.
 - Fixed X11 errors being lost in the PE host, which could crash it when a
   plugin's editor was closed.
+- Fixed clicks landing in the wrong place in plugin editors with more than one
+  monitor, when Wine's primary monitor has another monitor to its left or
+  above it (#13). By mgnsk.
+- Fixed crashes in plugins that read just past the end of their audio buffer,
+  such as PTEq-1a. The shared audio buffers are now followed by a zeroed page.
+  By mgnsk.
 
 ### Changed
 
