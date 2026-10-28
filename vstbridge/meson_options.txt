@@ -6,6 +6,17 @@ option(
 )
 
 option(
+  'pe-bitbridge',
+  type : 'boolean',
+  value : false,
+  description : '''Whether the 32-bit plugin host is a PE host built separately, for WoW64
+                   Wine builds that can't run a 32-bit Winelib host. The native plugin
+                   then starts `vstbridge-host-32.exe` through `wine-loader`. Build it with
+                   \'-Dwine-host=pe\' and cross-mingw-i686.conf, which names the PE host
+                   and its unixlib after the 32-bit host.''',
+)
+
+option(
   'clap',
   type : 'boolean',
   value : true,

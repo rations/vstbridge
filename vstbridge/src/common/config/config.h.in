@@ -52,6 +52,13 @@ constexpr char vstbridge_host_name_32bit[] = "@host_binary_32bit@";
 constexpr bool vstbridge_host_is_pe = @host_is_pe@;
 
 /**
+ * Whether the 32-bit plugin host is a PE executable. Besides `-Dwine-host=pe`
+ * builds that's the case with `-Dpe-bitbridge=true`, where the 64-bit host is
+ * a Winelib host and the 32-bit one runs on a WoW64 Wine.
+ */
+constexpr bool vstbridge_host_32bit_is_pe = @host_32bit_is_pe@;
+
+/**
  * The Wine binary used to start a PE plugin host when `WINELOADER` is not set.
  */
 constexpr char vstbridge_default_wine_loader[] = "@default_wine_loader@";

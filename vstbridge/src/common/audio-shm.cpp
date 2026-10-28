@@ -71,11 +71,15 @@ AudioShmBuffer::AudioShmBuffer(const Config& config) : config_(config) {
 AudioShmBuffer::~AudioShmBuffer() noexcept {
     // See below
     if (!is_moved_) {
-        unixlib::ShmDestroyArgs args{.name = config_.name.c_str(),
-                                     .fd = shm_fd_,
-                                     .address = shm_bytes_,
-                                     .size = shm_size_};
+        unixlib::ShmDestroyArgs args{
+            .name = config_.name.c_str(),
+            .fd = shm_fd_,
+            .address = unixlib::shm_needs_pe_allocation ? nullptr : shm_bytes_,
+            .size = shm_size_};
         unixlib::call(unixlib::shm_destroy, &args);
+        if (unixlib::shm_needs_pe_allocation) {
+            unixlib::free_shm_region(shm_bytes_);
+        }
     }
 }
 #else
@@ -139,21 +143,40 @@ void AudioShmBuffer::setup_mapping() {
     const size_t mapped_size =
         config_.size > 0 ? config_.size + audio_shm_padding_bytes : 0;
 
-    unixlib::ShmMapArgs args{.fd = shm_fd_,
-                             .size = mapped_size,
-                             .old_address = shm_bytes_,
-                             .old_size = shm_size_};
+    // The 32-bit host maps the object over a fresh allocation of its own (see
+    // `ShmMapArgs::fixed_address`) and then releases the old one
+    void* fixed_address = nullptr;
+    uint8_t* old_shm_bytes = shm_bytes_;
+    if (unixlib::shm_needs_pe_allocation && mapped_size > 0) {
+        fixed_address = unixlib::allocate_shm_region(mapped_size);
+        if (!fixed_address) {
+            throw std::runtime_error("Could not allocate " +
+                                     std::to_string(mapped_size) +
+                                     " bytes for shared memory");
+        }
+    }
+
+    unixlib::ShmMapArgs args{
+        .fd = shm_fd_,
+        .size = mapped_size,
+        .old_address = fixed_address ? nullptr : shm_bytes_,
+        .old_size = shm_size_,
+        .fixed_address = fixed_address};
     unixlib::call(unixlib::shm_map, &args);
     if (args.unlocked) {
         log_memlock_warning();
     }
     if (args.error) {
+        unixlib::free_shm_region(fixed_address);
         throw std::system_error(
             std::error_code(args.error, std::generic_category()),
             "Could not map shared memory");
     }
 
-    shm_bytes_ = static_cast<uint8_t*>(args.address);
+    if (fixed_address) {
+        unixlib::free_shm_region(old_shm_bytes);
+    }
+    shm_bytes_ = static_cast<uint8_t*>(static_cast<void*>(args.address));
     shm_size_ = mapped_size;
 
     // See below

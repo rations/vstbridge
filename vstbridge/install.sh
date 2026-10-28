@@ -44,6 +44,8 @@ if [ "$UNINSTALL" -eq 1 ]; then
         "$DATA_DIR"/vstbridge-host-unixlib.so \
         "$DATA_DIR"/vstbridge-host-32.exe \
         "$DATA_DIR"/vstbridge-host-32.exe.so \
+        "$DATA_DIR"/vstbridge-host-32-unixlib.so \
+        "$DATA_DIR"/vstbridge-host-32-unixlib-i386.so \
         "$DATA_DIR"/vstbridgectl \
         "$DATA_DIR"/vstbridgectl-gtk
 
@@ -77,6 +79,12 @@ done
 
 mkdir -p "$DATA_DIR"
 
+# The 32-bit host is a PE program with unixlibs since 0.0.4. vstbridgectl would still pick up
+# the Winelib host's .exe.so from an older install, so remove it.
+if [ -f "$SCRIPT_DIR/vstbridge-host-32-unixlib.so" ]; then
+    rm -f "$DATA_DIR/vstbridge-host-32.exe.so"
+fi
+
 for f in \
     libvstbridge-vst2.so \
     libvstbridge-vst3.so \
@@ -89,6 +97,8 @@ for f in \
     vstbridge-host-unixlib.so \
     vstbridge-host-32.exe \
     vstbridge-host-32.exe.so \
+    vstbridge-host-32-unixlib.so \
+    vstbridge-host-32-unixlib-i386.so \
     vstbridgectl \
     vstbridgectl-gtk
 do
