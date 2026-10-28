@@ -23,10 +23,13 @@
 //
 // Replies, events and errors are allocated by libxcb with the Linux `malloc()`,
 // but the host code frees them with its own `free()`. The thunks copy them
-// into memory allocated on the PE side and then free the original through
-// `xcb_op_free`.
+// into memory allocated on the PE side through `xcb_op_copy` (the 32-bit host
+// can't read libxcb's memory itself), and then free the original through
+// `xcb_op_free`. The connection's setup data is copied the same way, once.
 
 #include <stdint.h>
+
+#include "calls.h"
 
 namespace unixlib {
 
@@ -76,26 +79,35 @@ enum XcbOp : uint32_t {
     // Frees `args[0]` and `args[1]` (either may be null) with the Linux
     // `free()`
     xcb_op_free,
+    // Copies `args[2]` bytes from the Linux side's `args[0]` to the PE side's
+    // `args[1]`
+    xcb_op_copy,
+    xcb_op_connection_has_error,
 };
 
 struct XcbArgs {
     uint32_t op;
     uint32_t reserved;
     // The function's arguments in order. Pointers are passed as is, since both
-    // sides share the address space.
-    uint64_t args[13];
+    // sides share the address space. `xcb_connection_t*` is the exception, see
+    // `xcb-thunks.cpp`.
+    aligned_uint64_t args[13];
     // The return value. Cookies are returned as their sequence number and
     // pointers as the address.
-    uint64_t result;
+    aligned_uint64_t result;
 
     // For functions returning a reply or an event, the libxcb allocation and
-    // its size in bytes. Set to null if there was no reply.
-    void* packet;
-    uint64_t packet_size;
+    // its size in bytes. Set to 0 if there was no reply. Also used for
+    // `xcb_op_get_setup`'s setup data, which isn't freed.
+    aligned_uint64_t packet;
+    aligned_uint64_t packet_size;
     // For functions that return an error through an `xcb_generic_error_t**` or
     // as their return value. The error is always `error_size` bytes.
-    void* error;
-    uint64_t error_size;
+    aligned_uint64_t error;
+    aligned_uint64_t error_size;
 };
+
+// See `calls.h`
+static_assert(sizeof(XcbArgs) == 152);
 
 }  // namespace unixlib

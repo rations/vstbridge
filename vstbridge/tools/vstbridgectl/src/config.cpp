@@ -302,8 +302,14 @@ VstbridgeFiles Config::files() const {
     std::optional<fs::path> host_32_exe_so;
     if (host_32_exe) {
         auto so = host_32_exe->parent_path() / (host_32_exe->filename().string() + ".so");
+        // vstbridge built with `-Dpe-bitbridge=true` has a 32-bit PE host
+        // with its own unixlib instead, for WoW64 Wine builds
+        auto unixlib = host_32_exe->parent_path() /
+                       (host_32_exe->stem().string() + VSTBRIDGE_HOST_UNIXLIB_SUFFIX);
         if (fs::exists(so))
             host_32_exe_so = so;
+        else if (fs::exists(unixlib))
+            host_32_exe_so = unixlib;
     }
 
     return VstbridgeFiles{

@@ -196,7 +196,7 @@ NTSTATUS do_path_create_directories(void* args) {
     auto& a = *static_cast<PathArgs*>(args);
 
     std::error_code err;
-    std::filesystem::create_directories(a.path, err);
+    std::filesystem::create_directories(static_cast<const char*>(a.path), err);
     a.error = err.value();
 
     return 0;
@@ -206,7 +206,7 @@ NTSTATUS do_path_remove_all(void* args) {
     auto& a = *static_cast<PathArgs*>(args);
 
     std::error_code err;
-    std::filesystem::remove_all(a.path, err);
+    std::filesystem::remove_all(static_cast<const char*>(a.path), err);
     a.error = err.value();
 
     return 0;
@@ -258,11 +258,16 @@ NTSTATUS do_shm_map(void* args) {
         return 0;
     }
 
+    // `fixed_address` replaces the pages of a PE-side allocation, which Wine
+    // keeps tracking as committed memory, so this stays below 4 GiB for the
+    // 32-bit host
+    void* const fixed_address = a.fixed_address;
+    const int fixed_flag = fixed_address ? MAP_FIXED : 0;
     void* address =
         a.old_address
             ? mremap(a.old_address, a.old_size, a.size, MREMAP_MAYMOVE)
-            : mmap(nullptr, a.size, PROT_READ | PROT_WRITE,
-                   MAP_SHARED | MAP_LOCKED, a.fd, 0);
+            : mmap(fixed_address, a.size, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_LOCKED | fixed_flag, a.fd, 0);
     if (address == MAP_FAILED) {
         // The memory locking limit was probably reached, so we'll try again
         // without locking the memory. The PE side prints a warning.
@@ -271,8 +276,8 @@ NTSTATUS do_shm_map(void* args) {
             munmap(a.old_address, a.old_size);
         }
 
-        address = mmap(nullptr, a.size, PROT_READ | PROT_WRITE, MAP_SHARED,
-                       a.fd, 0);
+        address = mmap(fixed_address, a.size, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | fixed_flag, a.fd, 0);
         if (address == MAP_FAILED) {
             a.error = errno;
             a.address = nullptr;
@@ -371,10 +376,17 @@ uint64_t event_size(const xcb_generic_event_t* event) {
     }
 }
 
-void set_reply(XcbArgs& a, void* reply, xcb_generic_error_t* error) {
-    a.packet = reply;
+// `error` is a reference since the callers pass the variable the reply
+// function fills in, in the same call. Taking it by value could read it
+// before the reply function runs, since argument evaluation order is
+// unspecified (GCC evaluates right to left), and every X11 error would be
+// lost: no reply, no error.
+void set_reply(XcbArgs& a,
+               void* reply,
+               xcb_generic_error_t* const& error) {
+    a.packet = reinterpret_cast<uintptr_t>(reply);
     a.packet_size = reply ? reply_size(reply) : 0;
-    a.error = error;
+    a.error = reinterpret_cast<uintptr_t>(error);
     a.error_size = error ? sizeof(xcb_generic_error_t) : 0;
 }
 
@@ -388,9 +400,9 @@ NTSTATUS do_xcb_call(void* args) {
     xcb_generic_error_t** error_ptr = nullptr;
 
     a.result = 0;
-    a.packet = nullptr;
+    a.packet = 0;
     a.packet_size = 0;
-    a.error = nullptr;
+    a.error = 0;
     a.error_size = 0;
 
     switch (a.op) {
@@ -408,9 +420,14 @@ NTSTATUS do_xcb_call(void* args) {
         case xcb_op_generate_id:
             a.result = xcb_generate_id(conn);
             break;
-        case xcb_op_get_setup:
-            a.result = reinterpret_cast<uint64_t>(xcb_get_setup(conn));
-            break;
+        case xcb_op_get_setup: {
+            // The setup data is the 8 byte `xcb_setup_t` header plus `length`
+            // 4-byte units
+            const xcb_setup_t* setup = xcb_get_setup(conn);
+            a.result = reinterpret_cast<uint64_t>(setup);
+            a.packet = reinterpret_cast<uintptr_t>(setup);
+            a.packet_size = setup ? 8 + 4ull * setup->length : 0;
+        } break;
         case xcb_op_setup_roots_iterator:
             *reinterpret_cast<xcb_screen_iterator_t*>(v[1]) =
                 xcb_setup_roots_iterator(
@@ -421,7 +438,7 @@ NTSTATUS do_xcb_call(void* args) {
             break;
         case xcb_op_poll_for_event: {
             xcb_generic_event_t* event = xcb_poll_for_event(conn);
-            a.packet = event;
+            a.packet = reinterpret_cast<uintptr_t>(event);
             a.packet_size = event ? event_size(event) : 0;
         } break;
         case xcb_op_request_check:
@@ -669,6 +686,13 @@ NTSTATUS do_xcb_call(void* args) {
             free(reinterpret_cast<void*>(v[0]));
             free(reinterpret_cast<void*>(v[1]));
             break;
+        case xcb_op_connection_has_error:
+            a.result = static_cast<uint32_t>(xcb_connection_has_error(conn));
+            break;
+        case xcb_op_copy:
+            memcpy(reinterpret_cast<void*>(v[1]),
+                   reinterpret_cast<const void*>(v[0]), v[2]);
+            break;
     }
 
     return 0;
@@ -706,4 +730,37 @@ const unixlib_entry_t __wine_unix_call_funcs[] = {
 };
 
 static_assert(sizeof(__wine_unix_call_funcs) / sizeof(unixlib_entry_t) ==
+              call_count);
+
+// The same table for the 32-bit host on a WoW64 Wine, looked up by
+// `get_unixlib_funcs()` for `MemoryWineLoadUnixLibByNameWow64`. The argument
+// structs have the same layout there, see `calls.h`.
+extern "C" __attribute__((visibility("default")))
+const unixlib_entry_t __wine_unix_call_wow64_funcs[] = {
+    do_socket_connect,
+    do_socket_listen,
+    do_socket_accept,
+    do_socket_read,
+    do_socket_write,
+    do_socket_shutdown,
+    do_fd_close,
+    do_path_unlink,
+    do_path_create_directories,
+    do_path_remove_all,
+    do_path_socket_listening,
+
+    do_shm_open_fd,
+    do_shm_map,
+    do_shm_destroy,
+
+    do_process_id,
+    do_process_running,
+    do_thread_set_name,
+    do_sched_get_realtime_priority,
+    do_sched_set_realtime_priority,
+
+    do_xcb_call,
+};
+
+static_assert(sizeof(__wine_unix_call_wow64_funcs) / sizeof(unixlib_entry_t) ==
               call_count);

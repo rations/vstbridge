@@ -1510,6 +1510,12 @@ xcb_window_t get_root_window(xcb_connection_t& x11_connection,
     const std::unique_ptr<xcb_query_tree_reply_t> query_reply(
         xcb_query_tree_reply(&x11_connection, query_cookie, &error));
     THROW_X11_ERROR(error);
+    // libxcb returns neither a reply nor an error once the connection has
+    // failed
+    if (!query_reply) {
+        throw std::runtime_error("X11 connection error while querying window " +
+                                 std::to_string(window));
+    }
 
     return query_reply->root;
 }

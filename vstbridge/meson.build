@@ -39,6 +39,12 @@ endif
 if with_bitbridge and not with_wine_host
   error('The \'bitbridge\' option requires \'-Dwine-host=winelib\'.')
 endif
+if with_bitbridge and get_option('pe-bitbridge')
+  error('The \'bitbridge\' and \'pe-bitbridge\' options are mutually exclusive.')
+endif
+# A PE host built for x86 is the 32-bit bitbridge host, see the `pe-bitbridge`
+# option
+with_32bit_pe_host = with_pe_host and host_machine.cpu_family() == 'x86'
 
 # Cookies can't be stored correctly when the native host is 32-bit and the
 # bridged plugin is 64-bit
@@ -171,6 +177,16 @@ foreach option : compiler_options
     pe_host_compiler_options += option
   endif
 endforeach
+# The 32-bit PE host does need it, for the flush-to-zero intrinsics.
+#
+# It also uses emulated TLS. Some of the `thread_local` serialization buffers
+# are 16-byte aligned, and the compiler initializes them with aligned SSE
+# stores, but Wine (like Windows) allocates a 32-bit module's TLS block from
+# the heap with only 8-byte alignment, ignoring the TLS directory's alignment.
+# emutls allocates every variable with its own alignment instead.
+if with_32bit_pe_host
+  pe_host_compiler_options += ['-msse2', '-femulated-tls']
+endif
 
 #
 # Wine checks
@@ -466,8 +482,9 @@ if with_64bit_host
 endif
 
 if with_pe_host
+  pe_host_name = with_32bit_pe_host ? host_name_32bit : host_name_64bit
   executable(
-    host_name_64bit,
+    pe_host_name,
     host_pe_sources,
     native : false,
     include_directories : [include_dir, include_directories('src/wine-host/unixlib/include')],
@@ -477,18 +494,32 @@ if with_pe_host
     # VST3 SDK, which defines `UNICODE` before including `<windows.h>`.
     cpp_args : pe_host_compiler_options + ['-include', 'winsock2.h', '-I' + pe_xcb_include_dir],
     # Static linking so libc++ and friends don't have to be installed as DLLs
-    link_args : ['-static', '-lws2_32', '-lmswsock', '-lole32', '-lshell32', '-luuid'],
+    link_args : ['-static', '-lws2_32', '-lmswsock', '-lole32', '-lshell32', '-luuid'] + (with_32bit_pe_host ? ['-femulated-tls'] : []),
   )
   # Loaded by the host through `MemoryWineLoadUnixLibByName`, see
   # `src/wine-host/unixlib/calls.h`
   shared_library(
-    host_name_64bit + '-unixlib',
+    pe_host_name + '-unixlib',
     unixlib_sources,
     native : true,
     name_prefix : '',
     dependencies : [xcb_native_dep],
     cpp_args : compiler_options,
   )
+  # The 32-bit host also needs an i386 unixlib for Wine builds that still have a
+  # 32-bit Unix side, where it doesn't run in a 64-bit process. libxcb's headers
+  # are the same, but it has to link to the i386 library.
+  if with_32bit_pe_host
+    shared_library(
+      pe_host_name + '-unixlib-i386',
+      unixlib_sources,
+      native : true,
+      name_prefix : '',
+      dependencies : [xcb_native_dep.partial_dependency(compile_args : true, includes : true)],
+      cpp_args : compiler_options + ['-m32'],
+      link_args : ['-m32', '-lxcb'],
+    )
+  endif
 endif
 
 if with_bitbridge

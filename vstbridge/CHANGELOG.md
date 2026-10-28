@@ -8,6 +8,26 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-10-28
+
+### Fixed
+
+- 32-bit plugins work again on Wine builds without a 32-bit Unix side, such as
+  Arch Linux's and CachyOS's `wine-staging`. The 32-bit host is now a Windows
+  (PE) program that does its Linux work through a unixlib, instead of a 32-bit
+  Winelib program that these Wine builds can't start (`c000007b`). It ships
+  with two unixlibs, `vstbridge-host-32-unixlib.so` for these WoW64 Wine builds
+  and `vstbridge-host-32-unixlib-i386.so` for Wine with a 32-bit Unix side,
+  such as WineHQ's Debian packages, and picks the one that loads. PE host and
+  WoW64 support by mgnsk.
+- Fixed X11 errors being lost in the PE host, which could crash it when a
+  plugin's editor was closed.
+
+### Changed
+
+- `install.sh` removes the old 32-bit Winelib host, `vstbridge-host-32.exe.so`,
+  when it installs the new one.
+
 ## [0.0.3] - 2026-10-21
 
 ### Added

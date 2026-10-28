@@ -51,11 +51,15 @@ Process::Handle HostProcess::launch_host(
     child.arg(host_path.string() + ".so");
 #endif  // WINEDBG_LEGACY_ARGUMENT_QUOTING
 #else
-    // A PE plugin host (aarch64) is a regular Windows program, while the
-    // Winelib host comes with a launcher script
-    Process child(vstbridge_host_is_pe ? plugin_info.wine_loader()
-                                       : host_path.string());
-    if constexpr (vstbridge_host_is_pe) {
+    // A PE plugin host (aarch64, or the 32-bit host on a WoW64 Wine) is a
+    // regular Windows program, while the Winelib host comes with a launcher
+    // script
+    const bool host_is_pe =
+        host_path.filename() == vstbridge_host_name_32bit
+            ? vstbridge_host_32bit_is_pe
+            : vstbridge_host_is_pe;
+    Process child(host_is_pe ? plugin_info.wine_loader() : host_path.string());
+    if (host_is_pe) {
         child.arg(host_path.string());
     }
 #endif  // WITH_WINEDBG

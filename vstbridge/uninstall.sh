@@ -19,6 +19,8 @@ rm -f \
     "$DATA_DIR"/vstbridge-host-unixlib.so \
     "$DATA_DIR"/vstbridge-host-32.exe \
     "$DATA_DIR"/vstbridge-host-32.exe.so \
+    "$DATA_DIR"/vstbridge-host-32-unixlib.so \
+    "$DATA_DIR"/vstbridge-host-32-unixlib-i386.so \
     "$DATA_DIR"/vstbridgectl \
     "$DATA_DIR"/vstbridgectl-gtk
 

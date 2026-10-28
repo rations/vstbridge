@@ -19,6 +19,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <type_traits>
 
 #include "../xcb-native.h"
@@ -30,10 +31,26 @@ using namespace unixlib;
 
 namespace {
 
+/**
+ * What the PE side's `xcb_connection_t*` points to. libxcb's connection lives
+ * above 4 GiB, so the 32-bit host can't hold it as a pointer. The setup data is
+ * copied here on the first `xcb_get_setup()`, since the host reads it directly.
+ */
+struct Connection {
+    uint64_t native = 0;
+    xcb_setup_t* setup = nullptr;
+};
+
+Connection* connection(xcb_connection_t* c) {
+    return reinterpret_cast<Connection*>(c);
+}
+
 template <typename T>
 uint64_t to_arg(T value) {
     if constexpr (std::is_null_pointer_v<T>) {
         return 0;
+    } else if constexpr (std::is_same_v<T, xcb_connection_t*>) {
+        return value ? connection(value)->native : 0;
     } else if constexpr (std::is_pointer_v<T>) {
         return reinterpret_cast<uintptr_t>(value);
     } else {
@@ -56,15 +73,16 @@ XcbArgs xcb(XcbOp op, Ts... values) {
 
 /**
  * Copy something libxcb allocated into memory allocated with this side's
- * `malloc()`, so the host code can `free()` it.
+ * `malloc()`, so the host code can `free()` it. The copying happens on the
+ * Linux side, since the 32-bit host can't read libxcb's memory.
  */
-void* copy_packet(const void* packet, uint64_t size) {
+void* copy_packet(uint64_t packet, uint64_t size) {
     if (!packet) {
         return nullptr;
     }
 
     void* copy = malloc(size);
-    memcpy(copy, packet, size);
+    xcb(xcb_op_copy, packet, copy, size);
 
     return copy;
 }
@@ -74,7 +92,17 @@ void* copy_packet(const void* packet, uint64_t size) {
  * originals.
  */
 template <typename T>
-T* take_reply(const XcbArgs& args, xcb_generic_error_t** e) {
+T* take_reply(xcb_connection_t* c,
+              const XcbArgs& args,
+              xcb_generic_error_t** e) {
+    // This only happens when the connection has failed. Log why, since the
+    // caller usually can't tell.
+    if (!args.packet && !args.error) {
+        std::cerr << "xcb reply op " << args.op
+                  << " returned neither a reply nor an error, connection error "
+                  << xcb(xcb_op_connection_has_error, c).result << std::endl;
+    }
+
     T* reply = static_cast<T*>(copy_packet(args.packet, args.packet_size));
     auto* error = static_cast<xcb_generic_error_t*>(
         copy_packet(args.error, args.error_size));
@@ -103,12 +131,21 @@ Cookie cookie(const XcbArgs& args) {
 extern "C" {
 
 xcb_connection_t* xcb_connect(const char* displayname, int* screenp) {
-    return reinterpret_cast<xcb_connection_t*>(
-        xcb(xcb_op_connect, displayname, screenp).result);
+    // libxcb returns an error connection instead of null on failure
+    auto* c = new Connection{};
+    c->native = xcb(xcb_op_connect, displayname, screenp).result;
+
+    return reinterpret_cast<xcb_connection_t*>(c);
 }
 
 void xcb_disconnect(xcb_connection_t* c) {
+    if (!c) {
+        return;
+    }
+
     xcb(xcb_op_disconnect, c);
+    free(connection(c)->setup);
+    delete connection(c);
 }
 
 int xcb_flush(xcb_connection_t* c) {
@@ -119,22 +156,51 @@ uint32_t xcb_generate_id(xcb_connection_t* c) {
     return static_cast<uint32_t>(xcb(xcb_op_generate_id, c).result);
 }
 
-// The setup data belongs to the connection and is never freed by the caller,
-// so this can point to libxcb's copy
+// The setup data belongs to the connection and is never freed by the caller
 const struct xcb_setup_t* xcb_get_setup(xcb_connection_t* c) {
-    return reinterpret_cast<const xcb_setup_t*>(
-        xcb(xcb_op_get_setup, c).result);
+    if (!connection(c)->setup) {
+        const XcbArgs args = xcb(xcb_op_get_setup, c);
+        connection(c)->setup = static_cast<xcb_setup_t*>(
+            copy_packet(args.packet, args.packet_size));
+    }
+
+    return connection(c)->setup;
 }
 
+// These two walk the setup data the same way libxcb's generated
+// `xcb_setup_roots_iterator()` and `xcb_screen_next()` do. They run on this
+// side, since `xcb_screen_iterator_t` holds a pointer and so has a different
+// layout in the 32-bit host. The roots come after the vendor string (padded to
+// 4 bytes) and the pixmap formats, and each screen is followed by its depths,
+// each of which is followed by its visuals.
 xcb_screen_iterator_t xcb_setup_roots_iterator(const xcb_setup_t* R) {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(R);
+    const size_t offset = sizeof(xcb_setup_t) +
+                          ((R->vendor_len + 3u) & ~3u) +
+                          R->pixmap_formats_len * sizeof(xcb_format_t);
+
     xcb_screen_iterator_t iterator{};
-    xcb(xcb_op_setup_roots_iterator, R, &iterator);
+    iterator.data = reinterpret_cast<xcb_screen_t*>(
+        const_cast<uint8_t*>(bytes + offset));
+    iterator.rem = R->roots_len;
+    iterator.index = static_cast<int>(offset);
 
     return iterator;
 }
 
 void xcb_screen_next(xcb_screen_iterator_t* i) {
-    xcb(xcb_op_screen_next, i);
+    const auto* screen = reinterpret_cast<const uint8_t*>(i->data);
+    size_t size = sizeof(xcb_screen_t);
+    for (uint8_t depth = 0; depth < i->data->allowed_depths_len; depth++) {
+        const auto* d = reinterpret_cast<const xcb_depth_t*>(screen + size);
+        size += sizeof(xcb_depth_t) +
+                d->visuals_len * sizeof(xcb_visualtype_t);
+    }
+
+    i->data =
+        reinterpret_cast<xcb_screen_t*>(const_cast<uint8_t*>(screen + size));
+    i->rem--;
+    i->index += static_cast<int>(size);
 }
 
 xcb_generic_event_t* xcb_poll_for_event(xcb_connection_t* c) {
@@ -233,7 +299,7 @@ xcb_get_input_focus_reply_t* xcb_get_input_focus_reply(
     xcb_get_input_focus_cookie_t cookie,
     xcb_generic_error_t** e) {
     return take_reply<xcb_get_input_focus_reply_t>(
-        xcb(xcb_op_get_input_focus_reply, c, cookie.sequence, e != nullptr),
+        c, xcb(xcb_op_get_input_focus_reply, c, cookie.sequence, e != nullptr),
         e);
 }
 
@@ -250,7 +316,7 @@ xcb_get_keyboard_mapping_reply_t* xcb_get_keyboard_mapping_reply(
     xcb_get_keyboard_mapping_cookie_t cookie,
     xcb_generic_error_t** e) {
     return take_reply<xcb_get_keyboard_mapping_reply_t>(
-        xcb(xcb_op_get_keyboard_mapping_reply, c, cookie.sequence,
+        c, xcb(xcb_op_get_keyboard_mapping_reply, c, cookie.sequence,
             e != nullptr),
         e);
 }
@@ -285,7 +351,7 @@ xcb_get_property_reply_t* xcb_get_property_reply(
     xcb_get_property_cookie_t cookie,
     xcb_generic_error_t** e) {
     return take_reply<xcb_get_property_reply_t>(
-        xcb(xcb_op_get_property_reply, c, cookie.sequence, e != nullptr), e);
+        c, xcb(xcb_op_get_property_reply, c, cookie.sequence, e != nullptr), e);
 }
 
 void* xcb_get_property_value(const xcb_get_property_reply_t* R) {
@@ -316,7 +382,7 @@ xcb_intern_atom_reply_t* xcb_intern_atom_reply(xcb_connection_t* c,
                                                xcb_intern_atom_cookie_t cookie,
                                                xcb_generic_error_t** e) {
     return take_reply<xcb_intern_atom_reply_t>(
-        xcb(xcb_op_intern_atom_reply, c, cookie.sequence, e != nullptr), e);
+        c, xcb(xcb_op_intern_atom_reply, c, cookie.sequence, e != nullptr), e);
 }
 
 xcb_void_cookie_t xcb_map_window(xcb_connection_t* c, xcb_window_t window) {
@@ -334,7 +400,7 @@ xcb_query_pointer_reply_t* xcb_query_pointer_reply(
     xcb_query_pointer_cookie_t cookie,
     xcb_generic_error_t** e) {
     return take_reply<xcb_query_pointer_reply_t>(
-        xcb(xcb_op_query_pointer_reply, c, cookie.sequence, e != nullptr), e);
+        c, xcb(xcb_op_query_pointer_reply, c, cookie.sequence, e != nullptr), e);
 }
 
 xcb_query_tree_cookie_t xcb_query_tree(xcb_connection_t* c,
@@ -346,7 +412,7 @@ xcb_query_tree_reply_t* xcb_query_tree_reply(xcb_connection_t* c,
                                              xcb_query_tree_cookie_t cookie,
                                              xcb_generic_error_t** e) {
     return take_reply<xcb_query_tree_reply_t>(
-        xcb(xcb_op_query_tree_reply, c, cookie.sequence, e != nullptr), e);
+        c, xcb(xcb_op_query_tree_reply, c, cookie.sequence, e != nullptr), e);
 }
 
 xcb_void_cookie_t xcb_reparent_window(xcb_connection_t* c,
@@ -408,7 +474,7 @@ xcb_translate_coordinates_reply_t* xcb_translate_coordinates_reply(
     xcb_translate_coordinates_cookie_t cookie,
     xcb_generic_error_t** e) {
     return take_reply<xcb_translate_coordinates_reply_t>(
-        xcb(xcb_op_translate_coordinates_reply, c, cookie.sequence,
+        c, xcb(xcb_op_translate_coordinates_reply, c, cookie.sequence,
             e != nullptr),
         e);
 }

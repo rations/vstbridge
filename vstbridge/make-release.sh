@@ -6,6 +6,12 @@
 # README, CHANGELOG and LICENSE -- the installed surface and nothing else. No sources, no build
 # system, no tests.
 #
+# The 64-bit host is a Winelib program. The 32-bit host is a PE program built with llvm-mingw
+# (-Dpe-bitbridge=true, cross-mingw-i686.conf), because a WoW64 Wine such as Arch's has no
+# i386 Unix side to run a 32-bit Winelib host. It comes with two unixlibs: the 64-bit one for a
+# WoW64 Wine and an i386 one for a Wine with a 32-bit Unix side, such as WineHQ's Debian
+# packages. (WineHQ's Fedora packages are WoW64.)
+#
 # HOW IT IS INSTALLED. The archive is named after the version and architecture, but it always
 # unpacks into a flat vstbridge/ directory, and installs per user, without root:
 #
@@ -20,7 +26,8 @@
 # is checked below as well.
 #
 # x86_64 ONLY. This is the Winelib build. aarch64 can't build Winelib executables and is
-# released as Debian packages instead; see ../aarch64/build-debs.sh.
+# released as Debian packages instead; see ../aarch64/build-debs.sh. llvm-mingw's bin/ has to
+# be on the PATH for the 32-bit host.
 #
 # THE VERSION IS THE GIT TAG. meson.build still carries yabridge's version, so it can't be the
 # source. On a tagged commit (v0.0.3) the archive is vstbridge-0.0.3-x86_64; anywhere else it is
@@ -116,6 +123,13 @@ printf '\n%s %s (%s)\n\n' "Building release tarball for" "$name" "$kind"
 for tool in meson ninja make pkg-config objdump sha256sum; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
 done
+command -v i686-w64-mingw32-clang++ >/dev/null 2>&1 ||
+    die "i686-w64-mingw32-clang++ is required for the 32-bit host; put llvm-mingw's bin/ on the PATH"
+# The i386 unixlib is built with -m32 against the i386 libxcb
+echo 'int main(void) { return 0; }' |
+    ${CXX:-c++} -m32 -x c++ - -lxcb -o "${TMPDIR:-/tmp}/vstbridge-m32-check.$$" 2>/dev/null ||
+    die "building the i386 unixlib needs g++-multilib and libxcb1-dev:i386"
+rm -f "${TMPDIR:-/tmp}/vstbridge-m32-check.$$"
 tar --version 2>/dev/null | head -1 | grep -q 'GNU tar' ||
     die "GNU tar is required to create the archive (the archive itself is plain ustar)"
 pkg-config --exists gtk+-3.0 || die "GTK 3 development files are required for vstbridgectl-gtk"
@@ -139,7 +153,7 @@ prefix_map="-ffile-prefix-map=$root/= -ffile-prefix-map=$rel/="
 if ! meson setup "$build" "$root" \
         --buildtype=release \
         --cross-file="$root/cross-wine.conf" \
-        -Dbitbridge=true \
+        -Dpe-bitbridge=true \
         "-Dcpp_args=$prefix_map" \
         "-Dbuild.cpp_args=$prefix_map" >"$stage/meson.log" 2>&1 ||
    ! meson compile -C "$build" >>"$stage/meson.log" 2>&1; then
@@ -147,7 +161,27 @@ if ! meson setup "$build" "$root" \
     tail -40 "$stage/meson.log" >&2
     die "the vstbridge build failed (full log: ${TMPDIR:-/tmp}/vstbridge-release-meson.log)"
 fi
-say "vstbridge: clean release build with the 32-bit host"
+say "vstbridge: clean release build of the plugin libraries and the 64-bit host"
+
+# The 32-bit PE host and its unixlibs. Here the PE host is the cross target, so cpp_args is
+# llvm-mingw's and build.cpp_args the unixlibs'.
+build32=$stage/build-32
+mkdir "$build32"
+rel32=$(realpath --relative-to="$build32" "$root")
+prefix_map32="-ffile-prefix-map=$root/= -ffile-prefix-map=$rel32/="
+
+if ! meson setup "$build32" "$root" \
+        --buildtype=release \
+        --cross-file="$root/cross-mingw-i686.conf" \
+        -Dwine-host=pe \
+        "-Dcpp_args=$prefix_map32" \
+        "-Dbuild.cpp_args=$prefix_map32" >"$stage/meson-32.log" 2>&1 ||
+   ! meson compile -C "$build32" >>"$stage/meson-32.log" 2>&1; then
+    cp "$stage/meson-32.log" "${TMPDIR:-/tmp}/vstbridge-release-meson-32.log"
+    tail -40 "$stage/meson-32.log" >&2
+    die "the 32-bit host build failed (full log: ${TMPDIR:-/tmp}/vstbridge-release-meson-32.log)"
+fi
+say "vstbridge: clean release build of the 32-bit PE host and both unixlibs"
 
 # CXXFLAGS goes through the environment: the Makefile appends it to its own flags, whereas a
 # command-line CXXFLAGS would replace them. The dependencies are the pinned checkouts in deps/,
@@ -177,12 +211,20 @@ libvstbridge-chainloader-vst2.so
 libvstbridge-chainloader-vst3.so
 libvstbridge-chainloader-clap.so
 vstbridge-host.exe.so
-vstbridge-host-32.exe.so
 '
-# winegcc's launcher scripts for the two hosts
+# winegcc's launcher script for the 64-bit host
 launchers='
 vstbridge-host.exe
+'
+# The 32-bit PE host, and the unixlibs for a WoW64 Wine and for one with a 32-bit Unix side
+host32='
 vstbridge-host-32.exe
+vstbridge-host-32-unixlib.so
+vstbridge-host-32-unixlib-i386.so
+'
+unixlibs='
+vstbridge-host-32-unixlib.so
+vstbridge-host-32-unixlib-i386.so
 '
 tools='
 vstbridgectl
@@ -194,6 +236,7 @@ uninstall.sh
 '
 
 for f in $libraries $launchers; do cp "$build/$f" "$out/$f"; done
+for f in $host32; do cp "$build32/$f" "$out/$f"; done
 for f in $tools; do cp "$ctl/$f" "$out/$f"; done
 for f in $scripts; do cp "$root/$f" "$out/$f"; done
 cp "$repo/README.md" "$repo/LICENSE" "$root/CHANGELOG.md" "$out/"
@@ -206,7 +249,7 @@ printf 'Checking the staged tree\n'
 
 # 1. The manifest, EXACTLY: a file that appears fails as surely as one that goes missing. It is
 #    also the list install.sh and uninstall.sh have to agree with, which is checked below.
-printf '%s\n' $libraries $launchers $tools $scripts README.md LICENSE CHANGELOG.md |
+printf '%s\n' $libraries $launchers $host32 $tools $scripts README.md LICENSE CHANGELOG.md |
     sort > "$stage/expected"
 ( cd "$out" && find . -type f | sed 's|^\./||' | sort ) > "$stage/actual"
 if ! diff -u "$stage/expected" "$stage/actual" > "$stage/manifest.diff"; then
@@ -218,8 +261,14 @@ say "the staged tree is exactly the manifest ($(wc -l < "$stage/actual") files)"
 
 # 2. Nothing from this machine escaped, in the documents or in the binaries. A source path baked
 #    into a binary is the mistake that actually happens, and a text-only grep can't see it.
-leaks=$(grep -rl --binary-files=text \
-             -e 'CLAUDE\.md' -e '/home/' -e '/root/' "$out" 2>/dev/null || true)
+#    llvm-mingw's libc++abi and libunwind, linked into the 32-bit host, carry the source paths
+#    of llvm-mingw's own CI builds; those are the only /home/ paths allowed.
+leaks=$(cd "$out" && for f in *; do
+    if grep -q --binary-files=text -e 'CLAUDE\.md' -e '/root/' "$f" ||
+       grep -ao '/home/[[:graph:]]*' "$f" | grep -qv '^/home/runner/work/llvm-mingw/'; then
+        printf '%s/%s\n' "$out" "$f"
+    fi
+done)
 if [ -n "$leaks" ]; then
     die "shipped files name a local-only document or an absolute home path:
 $(printf '%s\n' "$leaks" | sed "s|^$out/|  |")"
@@ -264,7 +313,7 @@ say "every path fits ustar"
 
 # 6. install.sh and uninstall.sh name every file they need to. A library added to the build
 #    but not to the installer would ship and then never be installed.
-for f in $libraries $launchers $tools; do
+for f in $libraries $launchers $host32 $tools; do
     grep -q "$f" "$out/install.sh" || die "install.sh does not install $f"
     grep -q "$f" "$out/uninstall.sh" || die "uninstall.sh does not remove $f"
 done
@@ -286,7 +335,7 @@ allowed='libc.so.6 libm.so.6 libstdc++.so.6 libgcc_s.so.1
          libxcb.so.1
          libgtk-3.so.0 libgobject-2.0.so.0 libglib-2.0.so.0'
 glibc=
-for f in $libraries $tools; do
+for f in $libraries $unixlibs $tools; do
     for lib in $(needed "$out/$f"); do
         case " $(echo $allowed) " in
             *" $lib "*) ;;
@@ -299,7 +348,19 @@ was linked by accident." ;;
 done
 say "plugin libraries link: $(needed "$out/libvstbridge-vst3.so" | grep -v '^ld-linux' | tr '\n' ' ')"
 say "vstbridgectl-gtk links: $(needed "$out/vstbridgectl-gtk" | grep -v '^ld-linux' | tr '\n' ' ')"
-say "the 32-bit host needs the i386 libc, libstdc++ and libxcb (32-bit plugins only)"
+say "the i386 unixlib needs the i386 libc, libstdc++ and libxcb (32-bit plugins on a Wine without WoW64 only)"
+
+# The PE host has to run on any Wine without extra DLLs, so llvm-mingw's libc++, libunwind and
+# winpthreads have to be linked into it rather than imported
+dlls=$(objdump -p "$out/vstbridge-host-32.exe" | awk '/DLL Name:/ { print $3 }')
+[ -n "$dlls" ] || die "could not read the 32-bit host's imports"
+for dll in $dlls; do
+    case $(printf '%s' "$dll" | tr '[:upper:]' '[:lower:]') in
+        kernel32.dll|user32.dll|shell32.dll|ole32.dll|ws2_32.dll|api-ms-win-crt-*) ;;
+        *) die "vstbridge-host-32.exe imports a DLL that Wine doesn't provide: $dll" ;;
+    esac
+done
+say "the 32-bit host imports only Wine's system DLLs"
 
 [ -n "$glibc" ] || die "could not read the glibc symbol versions out of the binaries"
 if [ -n "$max_glibc" ] &&
@@ -314,7 +375,7 @@ say "needs glibc >= $glibc on $arch"
 # ---------------------------------------------------------------------------------------------
 find "$out" -type d -exec chmod 755 {} +
 find "$out" -type f -exec chmod 644 {} +
-for f in $libraries $launchers $tools $scripts; do chmod 755 "$out/$f"; done
+for f in $libraries $launchers $host32 $tools $scripts; do chmod 755 "$out/$f"; done
 
 if [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
     epoch=$SOURCE_DATE_EPOCH
@@ -384,7 +445,7 @@ if ! ( cd "$check/$top" && run_as_tester sh ./install.sh ) >"$stage/install.log"
     tail -30 "$stage/install.log" >&2
     die "the shipped install.sh failed"
 fi
-for f in $libraries $launchers $tools; do
+for f in $libraries $launchers $host32 $tools; do
     [ -x "$data/$f" ] || die "install.sh did not install $f as an executable"
     cmp -s "$check/$top/$f" "$data/$f" || die "install.sh installed a different $f"
 done

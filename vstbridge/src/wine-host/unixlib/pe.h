@@ -40,6 +40,26 @@ std::optional<std::string> init();
 void call(Call code, void* args);
 
 /**
+ * Whether shared memory has to be mapped over memory allocated here, with
+ * `allocate_shm_region()`, instead of wherever the Linux side's `mmap()` puts
+ * it. That's the case for the 32-bit host on a WoW64 Wine, which can only
+ * address the low 4 GiB.
+ */
+constexpr bool shm_needs_pe_allocation = sizeof(void*) < sizeof(uint64_t);
+
+/**
+ * Allocate `size` bytes of committed memory for `ShmMapArgs::fixed_address`.
+ * Returns null on failure.
+ */
+void* allocate_shm_region(size_t size);
+
+/**
+ * Release memory from `allocate_shm_region()`, along with the shared memory
+ * mapped over it. Does nothing for null.
+ */
+void free_shm_region(void* address);
+
+/**
  * Wine's `wine_get_dos_file_name()` and `wine_get_unix_file_name()` kernel32
  * exports. These are not in mingw-w64's import libraries, so they're looked up
  * at runtime. The returned strings must be freed with

@@ -20,12 +20,6 @@ XEmbed is also enabled by default in this fork (`editor_xembed = true` in `src/c
 
 For the full technical analysis see [readme-fixes.md](https://github.com/rations/vstbridge/blob/master/readme-fixes.md).
 
-### JUCE popup menu fix (Superior Drummer 3, EZdrummer 3, Hofa)
-
-With Wine 10.x and later, popup menus in some JUCE plugins open and immediately close again, for example the kit selector in Superior Drummer 3. JUCE creates its menus as `WS_POPUP | WS_SYSMENU` windows, and Wine treats a popup with a system menu as a window the window manager should manage. The fix removes `WS_SYSMENU` from captionless, non-resizable popup windows before Wine creates their X11 window, so they are mapped as override-redirect popups like native menus. Windows with a title bar or a resize frame are not touched.
-
-This is off by default, because JUCE creates its other windows without a title bar the same way, such as prompts with a text field, and those lose window manager handling too. If a plugin's menus close as soon as they open, turn it on for that plugin: tick **Fix popup menus that close immediately** in vstbridgectl's Plugins tab, or set `editor_popup_fix = true` in `vstbridge.toml`. Run with `VSTBRIDGE_DEBUG_LEVEL=+editor` to log every window it changes. Root cause analysis and the original patch by singularity098.
-
 ### GTK3 GUI for vstbridgectl
 
 The upstream yabridgectl management tool is command-line only. vstbridge adds a GTK3 graphical interface (`vstbridgectl-gtk`) for users who prefer not to use the terminal.
@@ -39,11 +33,26 @@ The GUI has these tabs:
 - **Blacklist** — exclude paths from the plugin scan
 - **Plugins** — change per-plugin settings, such as Wine DLL overrides and editor options, without editing `vstbridge.toml` by hand
 
+The Plugins tab also has **Fix popup menus that close immediately**, for JUCE plugins such as Superior Drummer 3, EZdrummer 3 and Hofa whose menus open and close again with Wine 10 and later. It's off by default and only needed for plugins with that problem (`editor_popup_fix = true` in `vstbridge.toml`). Root cause analysis and the original patch by singularity098.
+
+### Per-plugin Wine environment
+
+yabridge starts every plugin's Wine host with the same environment, so all plugins in a prefix share the same Wine settings. Plugins from different vendors don't always agree: one may need DXVK's `d3d11` and `dxgi` while another only draws with Wine's built-in versions. Until now the only way around that was a separate Wine prefix for each set of plugins.
+
+vstbridge adds an `environment` option to `vstbridge.toml`. It sets extra environment variables for one plugin's Wine host process, such as its own `WINEDLLOVERRIDES`, so plugins with different needs can share one prefix. Set it in vstbridgectl's Plugins tab (one `KEY=VALUE` per line under **Wine environment variables**) or in `vstbridge.toml`:
+
+```toml
+["SSL Native*.vst3"]
+environment = ["WINEDLLOVERRIDES=d3d11,dxgi=n,b"]
+```
+
+The variables are listed in the plugin's startup log, and changes apply the next time the plugin is loaded. The settings are per plugin, not per instance, and in a plugin group the plugin that starts the group decides the environment. See [Configuration](#configuration) for the details.
+
 ---
 
 ## Requirements
 
-- Wine Staging. This fork is tested with Wine Staging 11.09.
+- Wine Staging. This fork is tested with Wine Staging 11.20.
 - Winetricks for DXVK
 - A 64-bit Linux DAW (REAPER, Ardour etc.)
 - GTK3 (for the vstbridgectl-gtk GUI only)
@@ -189,11 +198,15 @@ sudo ln -s /opt/wine-stable/include/wine /opt/wine-staging/include/wine
 
 On Arch Linux, install `wine-staging` from the AUR; the compiler is named differently there. On Fedora, use `dnf`.
 
-**32-bit bitbridge prerequisites (`-Dbitbridge=true` only) — Debian/Ubuntu/Devuan**
+**32-bit host prerequisites — Debian/Ubuntu/Devuan**
+
+The release's 32-bit host is a PE program (`-Dpe-bitbridge=true`), so it also runs on a WoW64 Wine such as Arch's `wine-staging`, which can't run a 32-bit Winelib host. It needs [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) with its `bin/` directory on your `PATH`, plus the i386 toolchain for its i386 unixlib:
 
 ```bash
-sudo apt install g++-multilib libxcb1-dev:i386 uuid-dev:i386
+sudo apt install g++-multilib libxcb1-dev:i386
 ```
+
+The older 32-bit Winelib host (`-Dbitbridge=true`) only runs on a Wine with a 32-bit Unix side, and needs `g++-multilib libxcb1-dev:i386 uuid-dev:i386`.
 
 ### Building
 ```bash
@@ -211,19 +224,25 @@ ninja -C build
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `bitbridge` | false | Build a 32-bit host for 32-bit Windows plugins |
+| `bitbridge` | false | Build a 32-bit Winelib host for 32-bit Windows plugins |
+| `pe-bitbridge` | false | Use a 32-bit PE host built separately (see below) instead. Can't be combined with `bitbridge` |
 | `clap` | true | Build CLAP plugin support |
 | `vst3` | true | Build VST3 plugin support |
 | `system-asio` | false | Use the system `<asio.hpp>` instead of the bundled subproject |
 | `winedbg` | false | Run the Wine host under winedbg |
 
-Example with all plugin formats and 32-bit support:
+Example with all plugin formats and the 32-bit PE host, which is built in a second build directory with llvm-mingw:
 
 ```bash
 meson setup build --buildtype=release --cross-file=cross-wine.conf \
-  -Dclap=true -Dvst3=true -Dbitbridge=true
+  -Dclap=true -Dvst3=true -Dpe-bitbridge=true
 ninja -C build
+
+meson setup build-32 --buildtype=release --cross-file=cross-mingw-i686.conf -Dwine-host=pe
+ninja -C build-32
 ```
+
+Install `vstbridge-host-32.exe`, `vstbridge-host-32-unixlib.so` and `vstbridge-host-32-unixlib-i386.so` from `build-32` next to the files from `build`.
 
 ### Build outputs
 
@@ -236,7 +255,9 @@ ninja -C build
 | `libvstbridge-chainloader-vst3.so` | Tiny stub copied per-plugin (VST3) |
 | `libvstbridge-chainloader-clap.so` | Tiny stub copied per-plugin (CLAP) |
 | `vstbridge-host.exe` | Wine 64-bit plugin host process |
-| `vstbridge-host-32.exe` | Wine 32-bit plugin host process (requires `bitbridge=true`) |
+| `vstbridge-host-32.exe` | Wine 32-bit plugin host process (`bitbridge` or `pe-bitbridge`) |
+| `vstbridge-host-32-unixlib.so` | The 32-bit PE host's Linux side on a WoW64 Wine (`pe-bitbridge`) |
+| `vstbridge-host-32-unixlib-i386.so` | The 32-bit PE host's Linux side on a Wine with a 32-bit Unix side (`pe-bitbridge`) |
 
 ### Building vstbridgectl
 
@@ -249,7 +270,7 @@ make
 
 ### Making a release tarball
 
-`make-release.sh` builds vstbridge (with the 32-bit host) and vstbridgectl from scratch in a temporary directory, then packages them with the installer:
+`make-release.sh` builds vstbridge (with the 32-bit PE host, so llvm-mingw has to be on your `PATH`) and vstbridgectl from scratch in a temporary directory, then packages them with the installer:
 
 ```bash
 ./make-release.sh                    # writes dist/vstbridge-<version>-x86_64.tar.gz and .sha256
@@ -278,7 +299,7 @@ vstbridge adds a few options on top of yabridge's:
 |--------|--------|-------------|
 | `editor_xembed` | `{true,false}` | Embed the editor with XEmbed. Defaults to `true`. Set it to `false` to use yabridge's reparenting method instead. |
 | `editor_coordinate_hack` | `{true,false}` | Move the Wine window back to `(0, 0)` after every resize. This helps plugins that draw their GUI offset by the window's screen position. Defaults to `false`. |
-| `editor_popup_fix` | `{true,false}` | Fix JUCE popup menus that close as soon as they open with Wine 10.x and later (Superior Drummer 3, EZdrummer 3, Hofa). See [the popup menu fix](#juce-popup-menu-fix-superior-drummer-3-ezdrummer-3-hofa). Defaults to `false`. |
+| `editor_popup_fix` | `{true,false}` | Fix JUCE popup menus that close as soon as they open with Wine 10.x and later (Superior Drummer 3, EZdrummer 3, Hofa). Defaults to `false`. |
 | `environment` | `["KEY=VALUE", ...]` | Extra environment variables for this plugin's Wine host process. They override vstbridge's own settings, including `WINEPREFIX`. Defaults to none. |
 
 `environment` lets plugins with different Wine requirements share one prefix. For example, you can give one plugin its own DLL overrides:
