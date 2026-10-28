@@ -4,8 +4,8 @@
 
 # Wine and the wine-staging patch set. staging/upstream-commit in the staging tag must match
 # the Wine tag.
-WINE_VERSION=11.19
-WINE_STAGING_TAG=v11.19
+WINE_VERSION=11.20
+WINE_STAGING_TAG=v11.20
 
 # Installation prefix on the Pi. Kept private so it never conflicts with Debian's wine.
 WINE_PREFIX=/opt/vstbridge/wine

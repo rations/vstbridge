@@ -33,10 +33,11 @@ through Wine's ARM64EC support and FEX's `libarm64ecfex.dll`.
     go to FEX (FEX patch `0002`) instead of being dropped. iLok-protected plugins (PACE, such as
     Neural DSP's) set execute breakpoints on their own threads and fail with `c0000409` when they
     don't trap.
-  - `0008`: win32u reads the OpenGL extensions with `glGetStringi()` when `glGetString()` returns
-    none, as in OpenGL 3.1 contexts without the compatibility profile, the only kind Mesa's V3D
-    driver on the Pi offers. Wine 11.19 crashed there while holding a display lock, so
-    `explorer.exe` and every program that opened a window hung.
+  - Wine 11.19 needed an `0008` for the Pi's GPU: win32u read the OpenGL extensions with
+    `glGetString()`, which returns none in the OpenGL 3.1 contexts without the compatibility
+    profile that Mesa's V3D driver offers, and crashed while holding a display lock, so
+    `explorer.exe` and every program that opened a window hung. Wine 11.20 reads them with
+    `glGetStringi()` there itself (upstream commit 763d1c4b910).
 - `fex/patches/`:
   - `0001`: FEX's JIT code buffer can grow to 512 MB instead of 128 MB. PACE License Services
     (`LDSvc.exe`, 92 MB of x86-64 code) needs more while it serves a plugin. With 128 MB, FEX

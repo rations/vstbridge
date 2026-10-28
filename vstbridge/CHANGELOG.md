@@ -8,6 +8,11 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The aarch64 Wine build (wine-fex) is wine-staging 11.20. Its patch for the
+  Raspberry Pi's GPU is gone, since Wine 11.20 fixes that hang itself.
+
 ## [0.0.4] - 2026-10-28
 
 ### Fixed
