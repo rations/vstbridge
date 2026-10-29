@@ -55,7 +55,7 @@ cd "$work/build"
     --with-xrandr --with-xrender --with-xshape --with-xshm --with-xxf86vm \
     --with-opengl --with-vulkan \
     --with-freetype --with-fontconfig --with-gnutls \
-    --with-alsa --with-dbus --with-udev \
+    --with-alsa --with-dbus --with-udev --with-sdl \
     --without-wayland
 make -j"$(nproc)"
 
