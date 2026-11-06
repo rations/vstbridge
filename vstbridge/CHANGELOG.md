@@ -8,6 +8,8 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-11-06
+
 ### Fixed
 
 - `vstbridgectl sync` no longer writes over or deletes the original plugin
@@ -20,6 +22,12 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   if not, `sync --force` replaced them with the chainloader. Sync now also
   refuses to create or remove anything outside of the vstbridge plugin
   directories, apart from `.so` files in your plugin locations.
+
+### Changed
+
+- The aarch64 Wine build (wine-fex 11.20 pivuan2) is built with SDL, so
+  game controllers that SDL knows, such as the Switch Pro Controller, reach
+  Windows programs with an Xbox layout instead of as generic joysticks.
 
 ## [0.0.4] - 2026-10-28
 
