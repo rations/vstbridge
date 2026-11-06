@@ -16,8 +16,10 @@
 
 #include "vst3_moduleinfo.h"
 
+#include <algorithm>
 #include <array>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -67,13 +69,59 @@ std::string rewrite_cid(const std::string& cid) {
     return encode_hex_uid(rewrite_uid_byte_order(decode_hex_uid(cid)));
 }
 
+// moduleinfo.json files are JSON5-style: the VST3 SDK writes a comma after
+// every object member and array element, and the format allows comments.
+// nlohmann::json 3.11 can skip comments but rejects trailing commas, so this
+// removes both, leaving strings untouched. yabridgectl used serde_jsonrc,
+// which accepts them.
+std::string strip_comments_and_trailing_commas(const std::string& text) {
+    std::string out;
+    out.reserve(text.size());
+    // Index in `out` of a comma that's only kept if a value follows it
+    std::optional<size_t> pending_comma;
+
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '"') {
+            // Copy the whole string literal, including escaped quotes
+            pending_comma.reset();
+            const size_t begin = i++;
+            while (i < text.size() && text[i] != '"')
+                i += text[i] == '\\' ? 2 : 1;
+            out.append(text, begin, std::min(i, text.size() - 1) - begin + 1);
+        } else if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+            while (i < text.size() && text[i] != '\n')
+                ++i;
+            if (i < text.size())
+                out += '\n';
+        } else if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+            const size_t end = text.find("*/", i + 2);
+            i = end == std::string::npos ? text.size() : end + 1;
+            out += ' ';
+        } else if (c == ',') {
+            pending_comma = out.size();
+            out += c;
+        } else if (c == '}' || c == ']') {
+            if (pending_comma)
+                out.erase(*pending_comma, 1);
+            pending_comma.reset();
+            out += c;
+        } else {
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r')
+                pending_comma.reset();
+            out += c;
+        }
+    }
+
+    return out;
+}
+
 }  // namespace
 
 std::string rewrite_moduleinfo_uid_byte_orders(const std::string& json_text) {
     json doc;
     try {
-        // allow_comments=true, allow_exceptions=true (default), ignore_trailing_commas=true
-        doc = json::parse(json_text, nullptr, true, true);
+        doc = json::parse(strip_comments_and_trailing_commas(json_text));
     } catch (const json::parse_error& e) {
         throw std::runtime_error(std::string("Could not parse moduleinfo.json: ") + e.what());
     }

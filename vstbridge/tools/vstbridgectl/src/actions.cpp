@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <set>
 #include <unordered_map>
@@ -248,6 +249,27 @@ class TargetGuard {
     std::vector<fs::path> resolved_homes_;
     std::vector<fs::path> plugin_dirs_;
 };
+
+// Walk everything below `root` for the orphan scan. Symlinks below `root` are
+// not followed, so a symlink inside a plugin home can't lead the scan
+// somewhere else or into a loop, and unreadable directories are skipped
+// instead of stopping the sync. `visit` returns false to not descend into a
+// directory.
+static void walk_plugin_home(const fs::path& root,
+                             const std::function<bool(const fs::directory_entry&)>& visit) {
+    std::error_code ec;
+    if (!fs::exists(root, ec))
+        return;
+    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec);
+    for (; !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (!visit(*it))
+            it.disable_recursion_pending();
+    }
+    if (ec)
+        std::cerr << wrap_text(color::red("WARNING") + ": Could not scan all of '" +
+                               root.string() + "' for leftover files: " + ec.message())
+                  << "\n\n";
+}
 
 enum class InstallMethod { Copy, Symlink };
 
@@ -534,74 +556,53 @@ void do_sync(Config& config, const SyncOptions& opts) {
     auto collect_orphans_flat = [&](const fs::path& home,
                                     const std::unordered_set<std::string>& known,
                                     const std::vector<std::string>& valid_exts) {
-        std::error_code ec;
-        if (!fs::exists(home, ec))
-            return;
-        for (auto& entry : fs::recursive_directory_iterator(
-                 home, fs::directory_options::follow_directory_symlink, ec)) {
-            if (ec) {
-                ec.clear();
-                continue;
-            }
-            auto p = entry.path();
-            if (fs::is_directory(entry.symlink_status()))
-                continue;
-            auto ext = p.extension().string();
-            bool relevant = false;
-            for (const auto& e : valid_exts)
-                if (ext == e) {
-                    relevant = true;
-                    break;
-                }
-            if (!relevant)
-                continue;
+        walk_plugin_home(home, [&](const fs::directory_entry& entry) {
+            const auto& p = entry.path();
+            std::error_code ec;
+            if (fs::is_directory(entry.symlink_status(ec)))
+                return true;
+            const auto ext = p.extension().string();
+            if (std::find(valid_exts.begin(), valid_exts.end(), ext) == valid_exts.end())
+                return true;
             if (!known.count(p.string()))
                 if (auto ft = get_file_type(p))
                     orphan_files.push_back(*ft);
-        }
+            return true;
+        });
     };
 
     collect_orphans_flat(vst2_home, known_vst2_files, {".so", ".dll"});
     collect_orphans_flat(clap_home, known_clap_files, {".clap", ".clap-win", ".so"});
 
-    // VST3: scan .vst3 bundles in vst3_home
-    {
+    // VST3: every .vst3 bundle in vst3_home, including the ones in
+    // subdirectories, is either unknown and removed as a whole, or checked for
+    // files that no longer belong to it
+    walk_plugin_home(vst3_home, [&](const fs::directory_entry& entry) {
         std::error_code ec;
-        if (fs::exists(vst3_home, ec)) {
-            for (auto& entry :
-                 fs::directory_iterator(vst3_home, fs::directory_options::follow_directory_symlink,
-                                        ec)) {
-                if (ec) {
-                    ec.clear();
-                    continue;
-                }
-                auto bundle = entry.path();
-                if (bundle.extension().string() != ".vst3")
-                    continue;
+        if (!fs::is_directory(entry.symlink_status(ec)))
+            return true;
+        const auto& bundle = entry.path();
+        if (bundle.extension() != ".vst3")
+            return true;
 
-                auto it = known_vst3_bundle_files.find(bundle.string());
-                if (it == known_vst3_bundle_files.end()) {
-                    orphan_files.push_back(NativeFile::make_directory(bundle));
-                } else {
-                    const auto& managed = it->second;
-                    // Scan files inside the bundle for unknown files
-                    std::error_code bec;
-                    for (auto& bentry : fs::recursive_directory_iterator(bundle, bec)) {
-                        if (bec) {
-                            bec.clear();
-                            continue;
-                        }
-                        auto bp = bentry.path();
-                        if (fs::is_directory(bentry.symlink_status()))
-                            continue;
-                        if (!managed.count(bp.string()))
-                            if (auto ft = get_file_type(bp))
-                                orphan_files.push_back(*ft);
-                    }
-                }
-            }
+        auto it = known_vst3_bundle_files.find(bundle.string());
+        if (it == known_vst3_bundle_files.end()) {
+            orphan_files.push_back(NativeFile::make_directory(bundle));
+        } else {
+            const auto& managed = it->second;
+            walk_plugin_home(bundle, [&](const fs::directory_entry& bentry) {
+                std::error_code bec;
+                if (fs::is_directory(bentry.symlink_status(bec)))
+                    return true;
+                if (!managed.count(bentry.path().string()))
+                    if (auto ft = get_file_type(bentry.path()))
+                        orphan_files.push_back(*ft);
+                return true;
+            });
         }
-    }
+        // A bundle doesn't contain other bundles
+        return false;
+    });
 
     // ── Report / prune orphans ─────────────────────────────────────────────
 

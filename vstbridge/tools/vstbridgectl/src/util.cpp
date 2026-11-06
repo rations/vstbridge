@@ -206,11 +206,17 @@ std::string read_to_string(const fs::path& path) {
 }
 
 std::vector<uint8_t> read_bytes(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
     if (!in)
         throw std::runtime_error("Could not read file '" + path.string() + "'");
-    return std::vector<uint8_t>(std::istreambuf_iterator<char>(in),
-                                std::istreambuf_iterator<char>());
+    const std::streamsize size = in.tellg();
+    if (size < 0)
+        throw std::runtime_error("Could not read file '" + path.string() + "'");
+    std::vector<uint8_t> data(static_cast<size_t>(size));
+    in.seekg(0);
+    if (!in.read(reinterpret_cast<char*>(data.data()), size))
+        throw std::runtime_error("Could not read file '" + path.string() + "'");
+    return data;
 }
 
 // Run a command and return its combined stdout output, or throw on failure

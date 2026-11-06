@@ -16,8 +16,14 @@
 
 #include "files.h"
 
-#include <future>
+#include <sys/stat.h>
+
+#include <algorithm>
+#include <atomic>
+#include <functional>
 #include <iostream>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
 
 #include "symbols.h"
@@ -198,14 +204,33 @@ SearchIndex index(const fs::path& directory, const std::set<fs::path>& blacklist
 
     size_t file_count = 0;
 
-    // Stack-based recursive walk with symlink following
+    // The directories currently being walked, from the search root down, as
+    // (device, inode) pairs. Following a symlink to one of these would loop
+    // forever, like walkdir's loop detection in yabridgectl.
+    std::vector<std::pair<dev_t, ino_t>> ancestors;
+    auto dir_id = [](const fs::path& dir) -> std::optional<std::pair<dev_t, ino_t>> {
+        struct stat st {};
+        if (::stat(dir.c_str(), &st) != 0)
+            return std::nullopt;
+        return std::make_pair(st.st_dev, st.st_ino);
+    };
+
+    // Recursive walk that follows symlinks. Unreadable directories are
+    // skipped, as yabridgectl did.
     std::function<void(const fs::path&)> walk = [&](const fs::path& dir) {
+        const auto id = dir_id(dir);
+        if (id && std::find(ancestors.begin(), ancestors.end(), *id) != ancestors.end()) {
+            std::cerr << "WARNING: Skipping '" << dir.string()
+                      << "', it links back to one of its parent directories\n\n";
+            return;
+        }
+        if (id)
+            ancestors.push_back(*id);
+
         std::error_code ec;
         fs::directory_iterator it(dir, ec);
-        if (ec)
-            return;
-
-        for (const auto& entry : it) {
+        for (; !ec && it != fs::directory_iterator(); it.increment(ec)) {
+            const auto& entry = *it;
             auto entry_path = entry.path();
 
             // Blacklist check on canonical path
@@ -216,8 +241,9 @@ SearchIndex index(const fs::path& directory, const std::set<fs::path>& blacklist
                     continue;
             }
 
-            auto symlink_st = entry.symlink_status(ec);
-            if (ec) {
+            std::error_code sec;
+            auto symlink_st = entry.symlink_status(sec);
+            if (sec) {
                 // Broken symlink or permission error — include as a candidate
                 // (so it can appear in so_files for pruning)
                 auto ext = entry_path.extension().string();
@@ -275,6 +301,9 @@ SearchIndex index(const fs::path& directory, const std::set<fs::path>& blacklist
                     idx.so_files.push_back(NativeFile::make_regular(entry_path));
             }
         }
+
+        if (id)
+            ancestors.pop_back();
     };
 
     walk(directory);
@@ -282,6 +311,48 @@ SearchIndex index(const fs::path& directory, const std::set<fs::path>& blacklist
 }
 
 // ─── SearchIndex::search() ─────────────────────────────────────────────────────
+
+namespace {
+
+// Run `fn` on every item with at most one thread per CPU, like the rayon thread
+// pool yabridgectl used, and return the results in the order of `items`.
+// Starting a thread per file instead would read every plugin file into memory
+// at the same time.
+template <typename Item, typename Fn>
+auto parallel_map(const std::vector<Item>& items, Fn fn) {
+    using Result = decltype(fn(items.front()));
+    std::vector<Result> results(items.size());
+    std::atomic<size_t> next{0};
+    std::exception_ptr error;
+    std::mutex error_mutex;
+
+    auto work = [&] {
+        try {
+            for (size_t i; (i = next++) < items.size();)
+                results[i] = fn(items[i]);
+        } catch (...) {
+            std::lock_guard lock(error_mutex);
+            if (!error)
+                error = std::current_exception();
+            next = items.size();
+        }
+    };
+
+    const size_t num_threads = std::min<size_t>(
+        items.size(), std::max(1u, std::thread::hardware_concurrency()));
+    std::vector<std::thread> threads;
+    for (size_t i = 1; i < num_threads; ++i)
+        threads.emplace_back(work);
+    work();
+    for (auto& thread : threads)
+        thread.join();
+
+    if (error)
+        std::rethrow_exception(error);
+    return results;
+}
+
+}  // namespace
 
 SearchResults SearchIndex::search() const {
     SearchResults sr;
@@ -307,11 +378,9 @@ SearchResults SearchIndex::search() const {
         return false;
     };
 
-    // Validate DLL files in parallel using std::async
-    std::vector<std::future<std::optional<std::variant<Vst2Plugin, fs::path>>>> dll_futures;
-    dll_futures.reserve(dll_files.size());
-    for (const auto& [path, subdir] : dll_files) {
-        dll_futures.push_back(std::async(std::launch::async, [path, subdir, &try_parse, &has_export] {
+    // Validate DLL files in parallel
+    auto dll_results = parallel_map(dll_files, [&](const auto& item) {
+        const auto& [path, subdir] = item;
             auto info = try_parse(path);
             if (!info)
                 return std::optional<std::variant<Vst2Plugin, fs::path>>{};
@@ -320,11 +389,9 @@ SearchResults SearchIndex::search() const {
                 return std::optional<std::variant<Vst2Plugin, fs::path>>{
                     Vst2Plugin{path, arch, subdir}};
             return std::optional<std::variant<Vst2Plugin, fs::path>>{path};
-        }));
-    }
+    });
 
-    for (auto& fut : dll_futures) {
-        auto result = fut.get();
+    for (auto& result : dll_results) {
         if (!result)
             continue;
         if (auto* plugin = std::get_if<Vst2Plugin>(&*result))
@@ -334,11 +401,8 @@ SearchResults SearchIndex::search() const {
     }
 
     // Validate VST3 files in parallel
-    std::vector<std::future<std::optional<std::variant<Vst3Module, fs::path>>>> vst3_futures;
-    vst3_futures.reserve(vst3_files.size());
-    for (const auto& [module_path, subdir] : vst3_files) {
-        vst3_futures.push_back(
-            std::async(std::launch::async, [module_path, subdir, &try_parse, &has_export] {
+    auto vst3_results = parallel_map(vst3_files, [&](const auto& item) {
+        const auto& [module_path, subdir] = item;
                 auto info = try_parse(module_path);
                 if (!info)
                     return std::optional<std::variant<Vst3Module, fs::path>>{};
@@ -382,11 +446,9 @@ SearchResults SearchIndex::search() const {
                 }
                 return std::optional<std::variant<Vst3Module, fs::path>>{
                     Vst3Module{Vst3ModuleKind::Legacy, module_path, arch, subdir}};
-            }));
-    }
+    });
 
-    for (auto& fut : vst3_futures) {
-        auto result = fut.get();
+    for (auto& result : vst3_results) {
         if (!result)
             continue;
         if (auto* module = std::get_if<Vst3Module>(&*result))
@@ -396,11 +458,8 @@ SearchResults SearchIndex::search() const {
     }
 
     // Validate CLAP files in parallel
-    std::vector<std::future<std::optional<std::variant<ClapPlugin, fs::path>>>> clap_futures;
-    clap_futures.reserve(clap_files.size());
-    for (const auto& [path, subdir] : clap_files) {
-        clap_futures.push_back(
-            std::async(std::launch::async, [path, subdir, &try_parse, &has_export] {
+    auto clap_results = parallel_map(clap_files, [&](const auto& item) {
+        const auto& [path, subdir] = item;
                 auto info = try_parse(path);
                 if (!info)
                     return std::optional<std::variant<ClapPlugin, fs::path>>{};
@@ -409,11 +468,9 @@ SearchResults SearchIndex::search() const {
                     return std::optional<std::variant<ClapPlugin, fs::path>>{
                         ClapPlugin{path, arch, subdir}};
                 return std::optional<std::variant<ClapPlugin, fs::path>>{path};
-            }));
-    }
+    });
 
-    for (auto& fut : clap_futures) {
-        auto result = fut.get();
+    for (auto& result : clap_results) {
         if (!result)
             continue;
         if (auto* plugin = std::get_if<ClapPlugin>(&*result))

@@ -22,6 +22,25 @@ Versioning](https://semver.org/spec/v2.0.0.html).
   if not, `sync --force` replaced them with the chainloader. Sync now also
   refuses to create or remove anything outside of the vstbridge plugin
   directories, apart from `.so` files in your plugin locations.
+- vstbridgectl now skips symlinks that point back to one of their parent
+  directories while scanning, instead of setting the same plugin up again at
+  every level (and practically hanging with more than one such link). This can
+  happen with Wine prefixes stored inside a folder that the prefix's
+  `drive_c/users/<you>` links to, such as `~/Documents`.
+- Scanning plugin locations no longer reads every plugin file into memory at
+  once. It now uses one thread per CPU, as yabridgectl did, which matters for
+  folders with large plugins on machines with little memory, such as a
+  Raspberry Pi.
+- `vstbridgectl sync --prune` now also removes leftover VST3 bundles in
+  subfolders of `~/.vst3/vstbridge`, and leftover files inside them, such as
+  the old 64-bit module after a plugin is replaced with its 32-bit version.
+  Before, those stayed and the DAW kept listing the plugin.
+- VST3 `moduleinfo.json` files are converted again. The VST3 SDK writes them
+  with trailing commas, which vstbridgectl's JSON parser rejected, so they
+  were left out of the bridged bundles with a parse error on every sync.
+- An unreadable folder inside `~/.vst/vstbridge`, `~/.vst3/vstbridge` or
+  `~/.clap/vstbridge` no longer makes every sync fail. Symlinks inside those
+  folders are also no longer followed when looking for leftover files.
 
 ### Changed
 

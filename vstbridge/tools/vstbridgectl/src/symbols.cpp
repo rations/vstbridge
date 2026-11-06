@@ -25,6 +25,8 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "util.h"
+
 // ─── Minimal PE32(+) parser ───────────────────────────────────────────────────
 // References:
 //   https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
@@ -96,12 +98,7 @@ T read_at(const std::vector<uint8_t>& data, size_t offset) {
 }
 
 Pe32Info parse_pe32_native(const fs::path& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f)
-        throw std::runtime_error("Cannot open '" + path.string() + "'");
-
-    std::vector<uint8_t> data((std::istreambuf_iterator<char>(f)),
-                               std::istreambuf_iterator<char>());
+    const std::vector<uint8_t> data = read_bytes(path);
 
     // DOS header
     if (data.size() < sizeof(DOSHeader))
