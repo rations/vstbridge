@@ -78,11 +78,15 @@ deps: $(DEP_DIR)/cli11/.git $(DEP_DIR)/nlohmann/.git $(DEP_DIR)/tomlplusplus/.gi
 
 # ─── Build rules ──────────────────────────────────────────────────────────────
 
+# Track header dependencies, so changing a header (such as the layout of a
+# struct) rebuilds every object that includes it
+DEPFLAGS := -MMD -MP
+
 $(BUILD_DIR)/%.o: src/%.cpp | $(BUILD_DIR) $(BUILD_DIR)/actions deps
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/actions/%.o: src/actions/%.cpp | $(BUILD_DIR)/actions deps
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(INCLUDES) -c $< -o $@
 
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
@@ -99,13 +103,15 @@ $(BUILD_DIR)/gui:
 # ─── GUI-specific build rules (need GTK_CFLAGS) ───────────────────────────────
 
 $(BUILD_DIR)/gui_main.o: src/gui_main.cpp | $(BUILD_DIR) deps
-	$(CXX) $(CXXFLAGS) $(GTK_CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(GTK_CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/gui/app_window.o: src/gui/app_window.cpp | $(BUILD_DIR)/gui deps
-	$(CXX) $(CXXFLAGS) $(GTK_CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(GTK_CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(GUI_TARGET): $(GUI_OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS) $(GTK_LIBS)
+
+-include $(sort $(OBJS:.o=.d) $(GUI_OBJS:.o=.d))
 
 # ─── Install / clean ──────────────────────────────────────────────────────────
 

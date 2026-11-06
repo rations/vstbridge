@@ -41,6 +41,27 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 - An unreadable folder inside `~/.vst/vstbridge`, `~/.vst3/vstbridge` or
   `~/.clap/vstbridge` no longer makes every sync fail. Symlinks inside those
   folders are also no longer followed when looking for leftover files.
+- `vstbridgectl-gtk` fixes:
+  - Removing a plugin directory no longer freezes the window when
+    vstbridgectl-gtk was started from a terminal. It now asks in a dialog
+    whether to remove the leftover `.so` files, which it didn't show at all
+    before.
+  - Settings → Apply no longer switches the VST2 location back to centralized
+    after `vstbridgectl set --vst2-location inline`. The VST2 location is now
+    only shown, and an invalid vstbridge path is refused.
+  - Changing directories, the blacklist or settings while a sync or status
+    check is running now waits for it to finish, instead of possibly
+    crashing or having the change overwritten.
+  - A configuration file that can't be read is now reported, instead of the
+    window opening with empty lists and the next change replacing the file.
+  - Closing the window during a sync or plugin scan now asks first, instead of
+    possibly crashing.
+  - Added directories and blacklist entries are stored with symlinks resolved,
+    like `vstbridgectl add` does, and the blacklist can now also hold single
+    files.
+  - Saving a plugin's settings to a symlinked `vstbridge.toml` now changes the
+    file it links to instead of replacing the symlink, and a failed write no
+    longer replaces the file with a partial copy.
 
 ### Changed
 

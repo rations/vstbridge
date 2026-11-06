@@ -260,10 +260,29 @@ std::vector<std::string> render_section(const std::string& key,
 }
 
 void write_atomically(const fs::path& path, const std::string& contents) {
-    create_dir_all(path.parent_path());
-    const fs::path temp = path.string() + ".tmp";
-    write_file(temp, contents);
-    fs::rename(temp, path);
+    // Write to the file a symlinked `vstbridge.toml` points to, such as one
+    // kept with the user's dotfiles, instead of replacing the symlink
+    fs::path target = path;
+    std::error_code ec;
+    if (fs::is_symlink(fs::symlink_status(path, ec))) {
+        target = fs::weakly_canonical(path, ec);
+        if (ec)
+            throw std::runtime_error("Could not resolve the symlink '" + path.string() +
+                                     "': " + ec.message());
+    }
+
+    create_dir_all(target.parent_path());
+    const fs::path temp = target.string() + ".tmp";
+    try {
+        write_file(temp, contents);
+        // Keep the file's permissions
+        if (const auto st = fs::status(target, ec); !ec && fs::exists(st))
+            fs::permissions(temp, st.permissions(), ec);
+        fs::rename(temp, target);
+    } catch (...) {
+        fs::remove(temp, ec);
+        throw;
+    }
 }
 
 }  // namespace

@@ -206,10 +206,7 @@ int main(int argc, char** argv) {
 
     try {
         if (app.got_subcommand("add")) {
-            std::error_code ec;
-            auto path = fs::canonical(fs::path(add_path_str), ec);
-            if (ec)
-                path = fs::path(add_path_str);
+            auto path = resolve_added_path(fs::path(add_path_str));
             add_directory(config, path);
 
         } else if (app.got_subcommand("rm")) {
@@ -227,10 +224,7 @@ int main(int argc, char** argv) {
 
         } else if (app.got_subcommand("set")) {
             if (!set_path_str.empty()) {
-                std::error_code ec;
-                auto path = fs::canonical(fs::path(set_path_str), ec);
-                if (ec)
-                    path = fs::path(set_path_str);
+                auto path = resolve_added_path(fs::path(set_path_str));
                 set_opts.path = path;
             }
             set_opts.path_auto = set_path_auto;
@@ -243,10 +237,7 @@ int main(int argc, char** argv) {
 
         } else if (app.got_subcommand("blacklist")) {
             if (bl_cmd->got_subcommand("add")) {
-                std::error_code ec;
-                auto path = fs::canonical(fs::path(bl_add_path_str), ec);
-                if (ec)
-                    path = fs::path(bl_add_path_str);
+                auto path = resolve_added_path(fs::path(bl_add_path_str));
                 blacklist::add_path(config, path);
             } else if (bl_cmd->got_subcommand("rm")) {
                 auto path = validate_path_from_set(bl_rm_path_str, blacklist_set);

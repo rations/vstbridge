@@ -192,10 +192,14 @@ void make_symlink(const fs::path& target, const fs::path& link) {
 }
 
 void write_file(const fs::path& path, const std::string& contents) {
-    std::ofstream out(path);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out)
         throw std::runtime_error("Could not write to '" + path.string() + "'");
     out << contents;
+    out.close();
+    // Catches a full disk, for instance, which only shows up when flushing
+    if (!out)
+        throw std::runtime_error("Could not write to '" + path.string() + "'");
 }
 
 std::string read_to_string(const fs::path& path) {

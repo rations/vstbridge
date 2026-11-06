@@ -31,6 +31,7 @@
 #include "../actions/blacklist.h"
 #include "../config.h"
 #include "../plugin_config.h"
+#include "../util.h"
 
 namespace fs = std::filesystem;
 
@@ -189,6 +190,26 @@ static void show_error(GtkWidget* parent, const std::string& msg) {
     gtk_widget_destroy(dlg);
 }
 
+static void show_info(GtkWidget* parent, const std::string& msg) {
+    GtkWidget* dlg = gtk_message_dialog_new(
+        GTK_WINDOW(parent),
+        GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE,
+        "%s", msg.c_str());
+    gtk_dialog_run(GTK_DIALOG(dlg));
+    gtk_widget_destroy(dlg);
+}
+
+// Sync and Status run on a copy of the config in the background, and a sync
+// writes the config when it's done. Changing it in the meantime would be
+// overwritten, so that waits until they're finished.
+static bool refuse_while_busy(AppWindow* win) {
+    if (!win->busy)
+        return false;
+    show_info(win->window,
+              "Wait for the sync or status check to finish before changing settings.");
+    return true;
+}
+
 static GtkWidget* make_output_textview() {
     GtkWidget* tv = gtk_text_view_new();
     gtk_text_view_set_editable(GTK_TEXT_VIEW(tv), FALSE);
@@ -252,8 +273,11 @@ void AppWindow::refresh_bl_list() {
 void AppWindow::refresh_settings() {
     gtk_entry_set_text(GTK_ENTRY(settings_path_entry),
                        config.vstbridge_home ? config.vstbridge_home->c_str() : "");
+    // Inline VST2 mode is only set with `vstbridgectl set --vst2-location`
     gtk_label_set_text(GTK_LABEL(settings_vst2_loc_lbl),
-                       pretty_path(vstbridge_vst2_home()).c_str());
+                       config.vst2_location == Vst2InstallationLocation::Inline
+                           ? "Inline, next to each plugin's .dll file"
+                           : pretty_path(vstbridge_vst2_home()).c_str());
 
     gtk_label_set_text(GTK_LABEL(settings_vst3_loc_lbl),
                        pretty_path(vstbridge_vst3_home()).c_str());
@@ -265,6 +289,7 @@ void AppWindow::refresh_settings() {
 
 static void on_dir_add(GtkButton*, gpointer data) {
     auto* win = static_cast<AppWindow*>(data);
+    if (refuse_while_busy(win)) return;
     GtkWidget* dlg = gtk_file_chooser_dialog_new(
         "Select VST2, VST3 or CLAP Plugin Directory", GTK_WINDOW(win->window),
         GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
@@ -274,7 +299,7 @@ static void on_dir_add(GtkButton*, gpointer data) {
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
         char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
         try {
-            add_directory(win->config, fs::path(path));
+            add_directory(win->config, resolve_added_path(fs::path(path)));
             win->config = Config::read();
             win->refresh_dir_list();
         } catch (const std::exception& e) {
@@ -287,14 +312,45 @@ static void on_dir_add(GtkButton*, gpointer data) {
 
 static void on_dir_rm(GtkButton*, gpointer data) {
     auto* win = static_cast<AppWindow*>(data);
+    if (refuse_while_busy(win)) return;
     GtkListBoxRow* row = gtk_list_box_get_selected_row(GTK_LIST_BOX(win->dir_list));
     if (!row) return;
     GtkWidget* lbl = gtk_bin_get_child(GTK_BIN(row));
     fs::path path(gtk_label_get_text(GTK_LABEL(lbl)));
     try {
-        remove_directory(win->config, path);
+        forget_directory(win->config, path);
         win->config = Config::read();
         win->refresh_dir_list();
+    } catch (const std::exception& e) {
+        show_error(win->window, e.what());
+        return;
+    }
+
+    // Like `vstbridgectl rm`, offer to remove the .so files vstbridgectl may
+    // have left in the directory
+    const auto leftovers = leftover_so_files(path);
+    if (leftovers.empty()) return;
+
+    std::string list;
+    for (const auto& f : leftovers)
+        list += "\n" + f.path.string();
+    GtkWidget* dlg = gtk_message_dialog_new(
+        GTK_WINDOW(win->window), GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION,
+        GTK_BUTTONS_NONE, "Remove the leftover .so files in this directory?");
+    gtk_message_dialog_format_secondary_text(
+        GTK_MESSAGE_DIALOG(dlg), "%zu .so files are still in '%s':\n%s",
+        leftovers.size(), path.c_str(), list.c_str());
+    gtk_dialog_add_buttons(GTK_DIALOG(dlg), "_Keep Them", GTK_RESPONSE_NO,
+                           "_Remove Them", GTK_RESPONSE_YES, nullptr);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_NO);
+    const gint resp = gtk_dialog_run(GTK_DIALOG(dlg));
+    gtk_widget_destroy(dlg);
+    if (resp != GTK_RESPONSE_YES) return;
+
+    try {
+        for (const auto& f : leftovers)
+            remove_file_or_dir(f.path);
+        show_info(win->window, "Removed " + std::to_string(leftovers.size()) + " files.");
     } catch (const std::exception& e) {
         show_error(win->window, e.what());
     }
@@ -309,7 +365,7 @@ static void on_sync_clicked(GtkButton*, gpointer data) {
     opts.no_verify = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(win->sync_noverify_cb));
     win->run_with_output(
         win->sync_spinner, win->sync_btn, win->sync_textview,
-        [win, opts]() mutable { do_sync(win->config, opts); },
+        [config = win->config, opts]() mutable { do_sync(config, opts); },
         [win]() { win->config = Config::read(); });
 }
 
@@ -317,7 +373,7 @@ static void on_status_refresh(GtkButton*, gpointer data) {
     auto* win = static_cast<AppWindow*>(data);
     win->run_with_output(
         win->status_spinner, win->status_btn, win->status_textview,
-        [win]() { show_status(win->config); });
+        [config = win->config]() { show_status(config); });
 }
 
 static void on_settings_browse(GtkButton*, gpointer data) {
@@ -338,6 +394,7 @@ static void on_settings_browse(GtkButton*, gpointer data) {
 
 static void on_settings_auto(GtkButton*, gpointer data) {
     auto* win = static_cast<AppWindow*>(data);
+    if (refuse_while_busy(win)) return;
     SetOptions opts{};
     opts.path_auto = true;
     try {
@@ -351,11 +408,21 @@ static void on_settings_auto(GtkButton*, gpointer data) {
 
 static void on_settings_apply(GtkButton*, gpointer data) {
     auto* win = static_cast<AppWindow*>(data);
+    if (refuse_while_busy(win)) return;
     SetOptions opts{};
-    const char* txt = gtk_entry_get_text(GTK_ENTRY(win->settings_path_entry));
-    if (txt && *txt)
-        opts.path = fs::path(txt);
-    opts.vst2_location = Vst2Location::Centralized;
+    // Like `vstbridgectl set --path`, the path has to be an existing directory.
+    // An empty path means searching the standard locations again.
+    const std::string txt = gtk_entry_get_text(GTK_ENTRY(win->settings_path_entry));
+    if (txt.empty()) {
+        opts.path_auto = true;
+    } else {
+        std::error_code ec;
+        if (!fs::is_directory(fs::path(txt), ec)) {
+            show_error(win->window, "'" + txt + "' is not a directory.");
+            return;
+        }
+        opts.path = resolve_added_path(fs::path(txt));
+    }
     try {
         set_settings(win->config, opts);
         win->config = Config::read();
@@ -365,18 +432,19 @@ static void on_settings_apply(GtkButton*, gpointer data) {
     }
 }
 
-static void on_bl_add(GtkButton*, gpointer data) {
-    auto* win = static_cast<AppWindow*>(data);
+static void add_blacklist_entry(AppWindow* win, GtkFileChooserAction action) {
+    if (refuse_while_busy(win)) return;
     GtkWidget* dlg = gtk_file_chooser_dialog_new(
-        "Select Path to Blacklist", GTK_WINDOW(win->window),
-        GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+        action == GTK_FILE_CHOOSER_ACTION_OPEN ? "Select File to Blacklist"
+                                               : "Select Folder to Blacklist",
+        GTK_WINDOW(win->window), action,
         "_Cancel", GTK_RESPONSE_CANCEL,
         "_Add", GTK_RESPONSE_ACCEPT, nullptr);
     gtk_file_chooser_set_show_hidden(GTK_FILE_CHOOSER(dlg), TRUE);
     if (gtk_dialog_run(GTK_DIALOG(dlg)) == GTK_RESPONSE_ACCEPT) {
         char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
         try {
-            blacklist::add_path(win->config, fs::path(path));
+            blacklist::add_path(win->config, resolve_added_path(fs::path(path)));
             win->config = Config::read();
             win->refresh_bl_list();
         } catch (const std::exception& e) {
@@ -387,8 +455,17 @@ static void on_bl_add(GtkButton*, gpointer data) {
     gtk_widget_destroy(dlg);
 }
 
+static void on_bl_add_folder(GtkButton*, gpointer data) {
+    add_blacklist_entry(static_cast<AppWindow*>(data), GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER);
+}
+
+static void on_bl_add_file(GtkButton*, gpointer data) {
+    add_blacklist_entry(static_cast<AppWindow*>(data), GTK_FILE_CHOOSER_ACTION_OPEN);
+}
+
 static void on_bl_rm(GtkButton*, gpointer data) {
     auto* win = static_cast<AppWindow*>(data);
+    if (refuse_while_busy(win)) return;
     GtkListBoxRow* row = gtk_list_box_get_selected_row(GTK_LIST_BOX(win->bl_list));
     if (!row) return;
     GtkWidget* lbl = gtk_bin_get_child(GTK_BIN(row));
@@ -404,6 +481,7 @@ static void on_bl_rm(GtkButton*, gpointer data) {
 
 static void on_bl_clear(GtkButton*, gpointer data) {
     auto* win = static_cast<AppWindow*>(data);
+    if (refuse_while_busy(win)) return;
     GtkWidget* confirm = gtk_message_dialog_new(
         GTK_WINDOW(win->window),
         GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
@@ -544,16 +622,6 @@ GtkWidget* AppWindow::build_settings_tab() {
     gtk_grid_attach(GTK_GRID(grid), auto_btn, 3, row, 1, 1);
     ++row;
 
-    // VST2 location
-    GtkWidget* vst2_lbl = gtk_label_new("VST2 location:");
-    gtk_label_set_xalign(GTK_LABEL(vst2_lbl), 0.0f);
-    gtk_grid_attach(GTK_GRID(grid), vst2_lbl, 0, row, 1, 1);
-
-    GtkWidget* vst2_mode_lbl = gtk_label_new("Centralized (~/.vst/vstbridge/)");
-    gtk_widget_set_halign(vst2_mode_lbl, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(grid), vst2_mode_lbl, 1, row, 2, 1);
-    ++row;
-
     // Apply
     GtkWidget* apply_btn = gtk_button_new_with_label("Apply");
     gtk_widget_set_halign(apply_btn, GTK_ALIGN_START);
@@ -614,9 +682,13 @@ GtkWidget* AppWindow::build_blacklist_tab() {
     GtkWidget* btn_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
     gtk_widget_set_margin_top(btn_row, 6);
 
-    GtkWidget* add_btn = gtk_button_new_with_label("+ Add");
-    g_signal_connect(add_btn, "clicked", G_CALLBACK(on_bl_add), this);
+    GtkWidget* add_btn = gtk_button_new_with_label("+ Add Folder");
+    g_signal_connect(add_btn, "clicked", G_CALLBACK(on_bl_add_folder), this);
     gtk_box_pack_start(GTK_BOX(btn_row), add_btn, FALSE, FALSE, 0);
+
+    GtkWidget* add_file_btn = gtk_button_new_with_label("+ Add File");
+    g_signal_connect(add_file_btn, "clicked", G_CALLBACK(on_bl_add_file), this);
+    gtk_box_pack_start(GTK_BOX(btn_row), add_file_btn, FALSE, FALSE, 0);
 
     GtkWidget* rm_btn = gtk_button_new_with_label("− Remove");
     g_signal_connect(rm_btn, "clicked", G_CALLBACK(on_bl_rm), this);
@@ -718,6 +790,7 @@ static gboolean plugin_scan_done_cb(gpointer data) {
     gtk_spinner_stop(GTK_SPINNER(win->plugins_spinner));
     gtk_widget_hide(win->plugins_spinner);
     gtk_widget_set_sensitive(win->plugins_refresh_btn, TRUE);
+    win->scanning = false;
 
     if (!result->error_msg.empty())
         show_error(win->window, result->error_msg);
@@ -729,6 +802,7 @@ static gboolean plugin_scan_done_cb(gpointer data) {
 void AppWindow::refresh_plugin_list() {
     if (!gtk_widget_get_sensitive(plugins_refresh_btn)) return;
     plugins_loaded = true;
+    scanning = true;
     gtk_widget_set_sensitive(plugins_refresh_btn, FALSE);
     gtk_widget_show(plugins_spinner);
     gtk_spinner_start(GTK_SPINNER(plugins_spinner));
@@ -1081,18 +1155,46 @@ GtkWidget* AppWindow::build_plugins_tab() {
 
 // ─── AppWindow::create / show_all ────────────────────────────────────────────
 
+// The sync, status check and plugin scan run on threads that use the window,
+// so quitting while one runs ends the process right away instead of tearing
+// the window down underneath them
+static gboolean on_window_delete(GtkWidget*, GdkEvent*, gpointer data) {
+    auto* win = static_cast<AppWindow*>(data);
+    if (!win->busy && !win->scanning)
+        return FALSE;
+
+    GtkWidget* dlg = gtk_message_dialog_new(
+        GTK_WINDOW(win->window), GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION,
+        GTK_BUTTONS_YES_NO, "vstbridgectl is still working. Quit anyway?");
+    gtk_message_dialog_format_secondary_text(
+        GTK_MESSAGE_DIALOG(dlg),
+        "A sync that's stopped partway is completed by the next sync.");
+    const gint resp = gtk_dialog_run(GTK_DIALOG(dlg));
+    gtk_widget_destroy(dlg);
+    if (resp == GTK_RESPONSE_YES)
+        _exit(0);
+    return TRUE;
+}
+
 AppWindow* AppWindow::create() {
     auto* win = new AppWindow{};
 
+    // Don't start with an empty config when it can't be read, since the next
+    // change would then overwrite the user's file
     try {
         win->config = Config::read();
-    } catch (...) {
+    } catch (const std::exception& e) {
+        show_error(nullptr, std::string("Could not read vstbridgectl's configuration.\n\n") +
+                                e.what());
+        delete win;
+        return nullptr;
     }
 
     win->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(win->window), "vstbridgectl");
     gtk_window_set_default_size(GTK_WINDOW(win->window), 720, 520);
     g_signal_connect(win->window, "destroy", G_CALLBACK(gtk_main_quit), nullptr);
+    g_signal_connect(win->window, "delete-event", G_CALLBACK(on_window_delete), win);
 
     GtkWidget* notebook = gtk_notebook_new();
 

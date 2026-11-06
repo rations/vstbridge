@@ -19,8 +19,10 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "config.h"
+#include "types.h"
 
 namespace fs = std::filesystem;
 
@@ -40,8 +42,16 @@ struct SyncOptions {
     bool verbose = false;
 };
 
+// The path to store for `add` and `blacklist add`: absolute, with symlinks
+// resolved
+fs::path resolve_added_path(const fs::path& path);
 void add_directory(Config& config, fs::path path);
+// Remove a plugin location and ask on the terminal whether to delete the
+// leftover .so files in it
 void remove_directory(Config& config, const fs::path& path);
+// The parts of `remove_directory()` for the GUI, which asks with a dialog
+void forget_directory(Config& config, const fs::path& path);
+std::vector<NativeFile> leftover_so_files(const fs::path& path);
 void list_directories(const Config& config);
 void show_status(const Config& config);
 void set_settings(Config& config, const SetOptions& opts);

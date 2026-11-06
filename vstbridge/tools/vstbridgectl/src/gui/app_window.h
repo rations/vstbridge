@@ -62,6 +62,8 @@ struct AppWindow {
     // The "custom settings" label for each entry in `plugins`
     std::vector<GtkWidget*> plugin_status_lbls;
     bool plugins_loaded = false;
+    // A plugin scan is running in the background
+    bool scanning = false;
 
     Config config;
     bool busy = false;

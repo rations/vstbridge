@@ -33,6 +33,8 @@ int main(int argc, char** argv) {
     gtk_init(&argc, &argv);
 
     AppWindow* win = AppWindow::create();
+    if (!win)
+        return 1;
     win->show_all();
 
     gtk_main();

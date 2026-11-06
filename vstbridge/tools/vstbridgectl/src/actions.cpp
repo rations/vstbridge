@@ -31,17 +31,33 @@
 
 // ─── add / remove / list ───────────────────────────────────────────────────────
 
+fs::path resolve_added_path(const fs::path& path) {
+    // Relative paths would cause odd behaviour, and yabridgectl resolved
+    // symlinks here as well
+    std::error_code ec;
+    auto canonical = fs::canonical(path, ec);
+    return ec ? path : canonical;
+}
+
 void add_directory(Config& config, fs::path path) {
     config.plugin_dirs.insert(std::move(path));
     config.write();
 }
 
-void remove_directory(Config& config, const fs::path& path) {
+void forget_directory(Config& config, const fs::path& path) {
     config.plugin_dirs.erase(path);
     config.write();
+}
+
+std::vector<NativeFile> leftover_so_files(const fs::path& path) {
+    return index(path, {}).so_files;
+}
+
+void remove_directory(Config& config, const fs::path& path) {
+    forget_directory(config, path);
 
     // Find any leftover .so files in the removed directory
-    auto orphans = index(path, {}).so_files;
+    auto orphans = leftover_so_files(path);
     if (orphans.empty())
         return;
 
