@@ -8,6 +8,19 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `vstbridgectl sync` no longer writes over or deletes the original plugin
+  files when a plugin directory contains a symlink to a folder outside of it,
+  such as a Wine prefix's `Common Files/CLAP/vendor` linked to a shared
+  `/opt` folder. The subfolder under `~/.clap/vstbridge` (and the VST2 and
+  VST3 equivalents) is now taken from the path as written, instead of with
+  the symlinks resolved, which produced a `../..` path that led back onto the
+  originals. If they were read-only, sync stopped with "Permission denied";
+  if not, `sync --force` replaced them with the chainloader. Sync now also
+  refuses to create or remove anything outside of the vstbridge plugin
+  directories, apart from `.so` files in your plugin locations.
+
 ## [0.0.4] - 2026-10-28
 
 ### Added

@@ -251,12 +251,15 @@ SearchIndex index(const fs::path& directory, const std::set<fs::path>& blacklist
             }
 
             auto ext = entry_path.extension().string();
-            // Compute subdirectory relative to search root
+            // Compute subdirectory relative to search root. This must be
+            // lexical: fs::relative() resolves symlinks, so a symlinked
+            // subdirectory pointing outside the search root would produce a
+            // '../..' path that leads out of the vstbridge plugin homes and
+            // onto the original plugin files.
             auto parent = entry_path.parent_path();
             std::optional<fs::path> subdir;
-            std::error_code sec;
-            auto rel = fs::relative(parent, directory, sec);
-            if (!sec && !rel.empty() && rel.string() != ".")
+            auto rel = parent.lexically_relative(directory);
+            if (!rel.empty() && rel != "." && *rel.begin() != "..")
                 subdir = rel;
 
             if (ext == ".dll") {

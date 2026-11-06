@@ -156,9 +156,8 @@ void show_status(const Config& config) {
             else
                 status_str = color::red("invalid");
 
-            std::error_code ec;
-            auto rel = fs::relative(plugin_path, *dir_ptr, ec);
-            std::string display = (!ec && !rel.empty()) ? rel.string() : plugin_path.string();
+            auto rel = plugin_path.lexically_relative(*dir_ptr);
+            std::string display = !rel.empty() ? rel.string() : plugin_path.string();
 
             std::cout << "  " << display << " :: " << plugin_type << ", " << status_str << "\n";
         }
@@ -184,12 +183,80 @@ void set_settings(Config& config, const SetOptions& opts) {
 
 // ─── sync helpers ─────────────────────────────────────────────────────────────
 
+// True if `path` lies strictly inside `root`, comparing the paths as written.
+static bool lexically_inside(const fs::path& path, const fs::path& root) {
+    auto rel = path.lexically_normal().lexically_relative(root.lexically_normal());
+    return !rel.empty() && rel != "." && *rel.begin() != "..";
+}
+
+// Limits what sync may create or delete: anything inside the vstbridge plugin
+// homes (~/.vst/vstbridge, ~/.vst3/vstbridge, ~/.clap/vstbridge), and .so files
+// inside the configured plugin directories (inline VST2 targets and leftover
+// .so files). Paths inside a home are also checked with the symlinks in their
+// parent directories resolved, so neither a '..' in a computed path nor a
+// symlinked directory inside a home can lead a write or delete elsewhere, such
+// as onto the original plugin files.
+class TargetGuard {
+   public:
+    TargetGuard(std::vector<fs::path> homes, const std::set<fs::path>& plugin_dirs)
+        : homes_(std::move(homes)), plugin_dirs_(plugin_dirs.begin(), plugin_dirs.end()) {
+        for (const auto& home : homes_) {
+            std::error_code ec;
+            auto resolved = fs::weakly_canonical(home, ec);
+            resolved_homes_.push_back(ec ? home : resolved);
+        }
+    }
+
+    bool allows(const fs::path& path) const {
+        for (size_t i = 0; i < homes_.size(); ++i) {
+            if (!lexically_inside(path, homes_[i]))
+                continue;
+            std::error_code ec;
+            auto parent = fs::weakly_canonical(path.parent_path(), ec);
+            if (!ec && (parent == resolved_homes_[i] || lexically_inside(parent, resolved_homes_[i])))
+                return true;
+        }
+        if (path.extension() == ".so")
+            for (const auto& dir : plugin_dirs_)
+                if (lexically_inside(path, dir))
+                    return true;
+        return false;
+    }
+
+    void check(const fs::path& path) const {
+        if (!allows(path))
+            throw std::runtime_error("Refusing to modify '" + path.string() +
+                                     "' because it is outside of the vstbridge plugin "
+                                     "directories. This is a bug in vstbridgectl, please report "
+                                     "it.");
+    }
+
+    // True if `dir` is a directory strictly inside a home or a plugin
+    // directory, so it may be removed once it's empty.
+    bool may_remove_empty_dir(const fs::path& dir) const {
+        for (const auto& root : homes_)
+            if (lexically_inside(dir, root))
+                return true;
+        for (const auto& root : plugin_dirs_)
+            if (lexically_inside(dir, root))
+                return true;
+        return false;
+    }
+
+   private:
+    std::vector<fs::path> homes_;
+    std::vector<fs::path> resolved_homes_;
+    std::vector<fs::path> plugin_dirs_;
+};
+
 enum class InstallMethod { Copy, Symlink };
 
 // Install (copy or symlink) from→to. Returns true if the file was newly
 // created/updated, false if it was already up-to-date.
-static bool install_file(bool force, InstallMethod method, const fs::path& from,
-                         std::optional<int64_t> from_hash, const fs::path& to) {
+static bool install_file(const TargetGuard& guard, bool force, InstallMethod method,
+                         const fs::path& from, std::optional<int64_t> from_hash,
+                         const fs::path& to) {
+    guard.check(to);
     std::error_code ec;
     auto to_st = fs::symlink_status(to, ec);
     bool target_exists = !ec;
@@ -285,6 +352,12 @@ void do_sync(Config& config, const SyncOptions& opts) {
     bail_if_unsafe(vst3_home, "~/.vst3/vstbridge");
     bail_if_unsafe(clap_home, "~/.clap/vstbridge");
 
+    const TargetGuard guard({vst2_home, vst3_home, clap_home}, config.plugin_dirs);
+    auto create_parent_dirs = [&](const fs::path& file) {
+        guard.check(file);
+        create_dir_all(file.parent_path());
+    };
+
     std::unordered_set<std::string> managed_plugins;
     std::unordered_set<std::string> new_plugins;
     size_t skipped_count = 0;
@@ -332,18 +405,18 @@ void do_sync(Config& config, const SyncOptions& opts) {
                                 return;
                             }
 
-                            create_dir_all(native.parent_path());
-                            if (install_file(opts.force, InstallMethod::Copy,
+                            create_parent_dirs(native);
+                            if (install_file(guard, opts.force, InstallMethod::Copy,
                                              files.vst2_chainloader, vst2_hash, native))
                                 new_plugins.insert(norm.string());
                             managed_plugins.insert(norm.string());
 
-                            install_file(true, InstallMethod::Symlink, p.path, std::nullopt,
+                            install_file(guard, true, InstallMethod::Symlink, p.path, std::nullopt,
                                          windows);
                         } else {
                             auto target = p.inline_native_target();
                             auto norm = normalize_path(target);
-                            if (install_file(opts.force, InstallMethod::Copy,
+                            if (install_file(guard, opts.force, InstallMethod::Copy,
                                              files.vst2_chainloader, vst2_hash, target))
                                 new_plugins.insert(norm.string());
                             managed_plugins.insert(norm.string());
@@ -372,21 +445,21 @@ void do_sync(Config& config, const SyncOptions& opts) {
                             return;
                         }
 
-                        create_dir_all(native.parent_path());
-                        if (install_file(opts.force, InstallMethod::Copy,
+                        create_parent_dirs(native);
+                        if (install_file(guard, opts.force, InstallMethod::Copy,
                                          files.vst3_chainloader->first, vst3_hash, native))
                             new_plugins.insert(norm.string());
                         managed_plugins.insert(norm.string());
                         bundle_files.insert(native.string());
 
-                        create_dir_all(windows.parent_path());
-                        install_file(true, InstallMethod::Symlink, p.original_module_path(),
+                        create_parent_dirs(windows);
+                        install_file(guard, true, InstallMethod::Symlink, p.original_module_path(),
                                      std::nullopt, windows);
                         bundle_files.insert(windows.string());
 
                         if (auto res_dir = p.original_resources_dir()) {
                             auto target_res = p.target_resources_dir();
-                            install_file(false, InstallMethod::Symlink, *res_dir, std::nullopt,
+                            install_file(guard, false, InstallMethod::Symlink, *res_dir, std::nullopt,
                                          target_res);
                             bundle_files.insert(target_res.string());
                         }
@@ -396,6 +469,7 @@ void do_sync(Config& config, const SyncOptions& opts) {
                             try {
                                 auto json_text = read_to_string(*moduleinfo_src);
                                 auto converted = rewrite_moduleinfo_uid_byte_orders(json_text);
+                                guard.check(moduleinfo_dst);
                                 write_file(moduleinfo_dst, converted);
                                 bundle_files.insert(moduleinfo_dst.string());
                             } catch (const std::exception& e) {
@@ -427,23 +501,21 @@ void do_sync(Config& config, const SyncOptions& opts) {
                             return;
                         }
 
-                        create_dir_all(native.parent_path());
-                        if (install_file(opts.force, InstallMethod::Copy,
+                        create_parent_dirs(native);
+                        if (install_file(guard, opts.force, InstallMethod::Copy,
                                          files.clap_chainloader->first, clap_hash, native))
                             new_plugins.insert(norm.string());
                         managed_plugins.insert(norm.string());
 
-                        install_file(true, InstallMethod::Symlink, p.path, std::nullopt, windows);
+                        install_file(guard, true, InstallMethod::Symlink, p.path, std::nullopt, windows);
                         plugin_path = p.path;
                     }
                 },
                 plugin);
 
             if (opts.verbose && !plugin_path.empty()) {
-                std::error_code ec;
-                auto rel = fs::relative(plugin_path, *dir_ptr, ec);
-                std::cout << "  "
-                          << ((!ec && !rel.empty()) ? rel.string() : plugin_path.string())
+                auto rel = plugin_path.lexically_relative(*dir_ptr);
+                std::cout << "  " << (!rel.empty() ? rel.string() : plugin_path.string())
                           << "\n";
             }
         }
@@ -551,6 +623,13 @@ void do_sync(Config& config, const SyncOptions& opts) {
         for (const auto& f : orphan_files) {
             std::cout << "- " << f.path.string() << "\n";
             if (opts.prune) {
+                if (!guard.allows(f.path)) {
+                    std::cerr << wrap_text(color::red("WARNING") + ": Not removing '" +
+                                           f.path.string() +
+                                           "' because it is outside of the vstbridge plugin "
+                                           "directories\n");
+                    continue;
+                }
                 if (f.kind == NativeFile::Kind::Directory)
                     remove_dir_all(f.path);
                 else
@@ -558,7 +637,8 @@ void do_sync(Config& config, const SyncOptions& opts) {
 
                 // Prune empty parent directories
                 auto parent = f.path.parent_path();
-                while (!parent.empty()) {
+                while (guard.may_remove_empty_dir(parent) &&
+                       fs::is_directory(fs::symlink_status(parent))) {
                     std::error_code pec;
                     if (!fs::remove(parent, pec) || pec)
                         break;
