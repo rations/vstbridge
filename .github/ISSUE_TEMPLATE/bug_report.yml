@@ -78,16 +78,6 @@ body:
     validations:
       required: true
   - type: input
-    id: yabridge-comparison
-    attributes:
-      label: Does the plugin work with upstream yabridge?
-      description: >-
-        If you've tried it, please include the yabridge and Wine versions you
-        used.
-      placeholder: e.g. yes, with yabridge 5.1.1 and Wine Staging 9.20
-    validations:
-      required: false
-  - type: input
     id: plugin
     attributes:
       label: Plugin
