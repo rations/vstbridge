@@ -707,9 +707,9 @@ void Editor::handle_x11_events() noexcept {
 
                     if (window == parent_window_ ||
                         window == wrapper_window_.window_) {
-                        if (!use_xembed_) {
-                            fix_local_coordinates();
-                        }
+                        // XEmbed also needs a refresh after an ancestor window moves.
+                        // fix_local_coordinates() updates the Win32 rect directly in that mode.
+                        fix_local_coordinates();
 
                         // In case the WM somehow does not support
                         // `_NET_ACTIVE_WINDOW`, a more naive focus grabbing
