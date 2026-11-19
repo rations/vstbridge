@@ -21,10 +21,10 @@
 // Utilities and tags for plugin types and architectures
 
 /**
- * A tag to differentiate between 32 and 64-bit `.dll` files, used to determine
- * which host application to use.
+ * A tag to differentiate between 32-bit, 64-bit and ARM64 `.dll` files, used
+ * to determine which host application to use.
  */
-enum class LibArchitecture { dll_32, dll_64 };
+enum class LibArchitecture { dll_32, dll_64, dll_arm64 };
 
 /**
  * A tag to differentiate between different plugin types.

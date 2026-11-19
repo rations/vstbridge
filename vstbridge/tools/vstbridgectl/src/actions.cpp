@@ -139,6 +139,14 @@ void show_status(const Config& config) {
             std::cout << "'" << f.vstbridge_host_32_exe->string() << "'\n";
         else
             std::cout << color::red("<not found>") << "\n";
+
+#ifdef __aarch64__
+        std::cout << VSTBRIDGE_HOST_ARM64_EXE_NAME << ": ";
+        if (f.vstbridge_host_arm64_exe)
+            std::cout << "'" << f.vstbridge_host_arm64_exe->string() << "'\n";
+        else
+            std::cout << color::red("<not found>") << "\n";
+#endif
     } catch (const std::exception& e) {
         std::cout << "Could not find vstbridge's files: " << e.what() << "\n";
     }
@@ -154,7 +162,8 @@ void show_status(const Config& config) {
                 [&](const auto& p) {
                     using T = std::decay_t<decltype(p)>;
                     if constexpr (std::is_same_v<T, Vst2Plugin>)
-                        plugin_type = color::cyan("VST2") + ", " + arch_to_string(p.architecture);
+                        plugin_type = color::cyan("VST2") + ", " + arch_to_string(p.architecture) +
+                                      (p.arm64_path ? " + ARM64" : "");
                     else if constexpr (std::is_same_v<T, Vst3Module>)
                         plugin_type = color::magenta("VST3") + ", " + p.type_str() + ", " +
                                       arch_to_string(p.architecture);
@@ -432,6 +441,9 @@ void do_sync(Config& config, const SyncOptions& opts) {
 
                             bool is_new = known_vst2_files.insert(native.string()).second;
                             is_new &= known_vst2_files.insert(windows.string()).second;
+                            if (p.arm64_path)
+                                is_new &= known_vst2_files.insert(p.centralized_arm64_target().string())
+                                              .second;
                             if (!is_new) {
                                 std::cerr << "\n"
                                           << wrap_text(color::red("WARNING") + ": '" +
@@ -451,6 +463,9 @@ void do_sync(Config& config, const SyncOptions& opts) {
 
                             install_file(guard, true, InstallMethod::Symlink, p.path, std::nullopt,
                                          windows);
+                            if (p.arm64_path)
+                                install_file(guard, true, InstallMethod::Symlink, *p.arm64_path,
+                                             std::nullopt, p.centralized_arm64_target());
                         } else {
                             auto target = p.inline_native_target();
                             auto norm = normalize_path(target);

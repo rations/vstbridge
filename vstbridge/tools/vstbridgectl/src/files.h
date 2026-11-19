@@ -35,9 +35,13 @@ struct Vst2Plugin {
     fs::path path;
     LibArchitecture architecture;
     std::optional<fs::path> subdirectory;
+    // The ARM64 version of this plugin from the same directory, if there is
+    // one. The bridge prefers it when the native ARM64 host is installed.
+    std::optional<fs::path> arm64_path;
 
     fs::path centralized_native_target() const;
     fs::path centralized_windows_target() const;
+    fs::path centralized_arm64_target() const;
     fs::path inline_native_target() const;
 };
 
@@ -100,7 +104,10 @@ struct SearchIndex {
     std::vector<std::pair<fs::path, std::optional<fs::path>>> clap_files;
     std::vector<NativeFile> so_files;
 
-    SearchResults search() const;
+    // With `pair_arm64_vst2`, an ARM64 VST2 plugin next to an x86_64 version
+    // of the same plugin is attached to that one instead of being listed as a
+    // plugin of its own.
+    SearchResults search(bool pair_arm64_vst2 = false) const;
 };
 
 SearchIndex index(const fs::path& directory, const std::set<fs::path>& blacklist);

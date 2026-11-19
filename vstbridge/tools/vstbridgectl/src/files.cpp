@@ -23,6 +23,7 @@
 #include <functional>
 #include <iostream>
 #include <mutex>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 
@@ -43,6 +44,10 @@ fs::path Vst2Plugin::centralized_windows_target() const {
     if (subdirectory)
         return vstbridge_vst2_home() / *subdirectory / file_name;
     return vstbridge_vst2_home() / file_name;
+}
+
+fs::path Vst2Plugin::centralized_arm64_target() const {
+    return centralized_native_target().replace_extension(".arm64.dll");
 }
 
 fs::path Vst2Plugin::inline_native_target() const {
@@ -352,9 +357,76 @@ auto parallel_map(const std::vector<Item>& items, Fn fn) {
     return results;
 }
 
+// The architecture tag for a parsed Windows plugin file
+LibArchitecture pe_architecture(const Pe32Info& info) {
+    if (info.is_arm64)
+        return LibArchitecture::LibArm64;
+    return info.is_64_bit ? LibArchitecture::Lib64 : LibArchitecture::Lib32;
+}
+
+// The name vendors' ARM64 and x86_64 builds of a VST2 plugin have in common:
+// the file name without its extension and without an architecture suffix, in
+// lower case. `TruePianosARM64.dll` and `TruePianos.dll` both give
+// `truepianos`.
+std::string vst2_pairing_key(const fs::path& path) {
+    std::string stem = path.stem().string();
+    std::transform(stem.begin(), stem.end(), stem.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    for (const char* suffix : {"arm64ec", "aarch64", "arm64", "x86_64", "amd64", "win64", "x64", "64"}) {
+        const std::string_view tail(suffix);
+        if (stem.size() <= tail.size() || !stem.ends_with(tail))
+            continue;
+        stem.erase(stem.size() - tail.size());
+        while (!stem.empty() && std::string_view(" -_.()").find(stem.back()) != std::string_view::npos)
+            stem.pop_back();
+        break;
+    }
+    return stem;
+}
+
+// Attach every ARM64 VST2 plugin to the x86_64 version of the same plugin in
+// the same directory, so that one bridged plugin covers both. ARM64 plugins
+// without a counterpart stay plugins of their own.
+void pair_arm64_vst2_plugins(std::vector<Plugin>& plugins) {
+    std::map<std::pair<fs::path, std::string>, std::vector<size_t>> x86_64_plugins;
+    for (size_t i = 0; i < plugins.size(); ++i) {
+        const auto* plugin = std::get_if<Vst2Plugin>(&plugins[i]);
+        if (plugin && plugin->architecture == LibArchitecture::Lib64)
+            x86_64_plugins[{plugin->path.parent_path(), vst2_pairing_key(plugin->path)}].push_back(i);
+    }
+
+    std::vector<bool> paired(plugins.size(), false);
+    for (size_t i = 0; i < plugins.size(); ++i) {
+        const auto* plugin = std::get_if<Vst2Plugin>(&plugins[i]);
+        if (!plugin || plugin->architecture != LibArchitecture::LibArm64)
+            continue;
+
+        // Ambiguous matches are left alone
+        const auto match =
+            x86_64_plugins.find({plugin->path.parent_path(), vst2_pairing_key(plugin->path)});
+        if (match == x86_64_plugins.end() || match->second.size() != 1)
+            continue;
+
+        auto& counterpart = std::get<Vst2Plugin>(plugins[match->second.front()]);
+        if (counterpart.arm64_path)
+            continue;
+        counterpart.arm64_path = plugin->path;
+        paired[i] = true;
+    }
+
+    std::vector<Plugin> remaining;
+    remaining.reserve(plugins.size());
+    for (size_t i = 0; i < plugins.size(); ++i) {
+        if (!paired[i])
+            remaining.push_back(std::move(plugins[i]));
+    }
+    plugins = std::move(remaining);
+}
+
 }  // namespace
 
-SearchResults SearchIndex::search() const {
+SearchResults SearchIndex::search(bool pair_arm64_vst2) const {
     SearchResults sr;
     sr.so_files = so_files;
 
@@ -384,10 +456,10 @@ SearchResults SearchIndex::search() const {
             auto info = try_parse(path);
             if (!info)
                 return std::optional<std::variant<Vst2Plugin, fs::path>>{};
-            auto arch = info->is_64_bit ? LibArchitecture::Lib64 : LibArchitecture::Lib32;
+            auto arch = pe_architecture(*info);
             if (has_export(info->exports, {"VSTPluginMain", "main"}))
                 return std::optional<std::variant<Vst2Plugin, fs::path>>{
-                    Vst2Plugin{path, arch, subdir}};
+                    Vst2Plugin{path, arch, subdir, std::nullopt}};
             return std::optional<std::variant<Vst2Plugin, fs::path>>{path};
     });
 
@@ -400,13 +472,16 @@ SearchResults SearchIndex::search() const {
             sr.skipped_files.push_back(std::get<fs::path>(*result));
     }
 
+    if (pair_arm64_vst2)
+        pair_arm64_vst2_plugins(sr.plugins);
+
     // Validate VST3 files in parallel
     auto vst3_results = parallel_map(vst3_files, [&](const auto& item) {
         const auto& [module_path, subdir] = item;
                 auto info = try_parse(module_path);
                 if (!info)
                     return std::optional<std::variant<Vst3Module, fs::path>>{};
-                auto arch = info->is_64_bit ? LibArchitecture::Lib64 : LibArchitecture::Lib32;
+                auto arch = pe_architecture(*info);
                 if (!has_export(info->exports, {"GetPluginFactory"}))
                     return std::optional<std::variant<Vst3Module, fs::path>>{module_path};
 
@@ -463,7 +538,7 @@ SearchResults SearchIndex::search() const {
                 auto info = try_parse(path);
                 if (!info)
                     return std::optional<std::variant<ClapPlugin, fs::path>>{};
-                auto arch = info->is_64_bit ? LibArchitecture::Lib64 : LibArchitecture::Lib32;
+                auto arch = pe_architecture(*info);
                 if (has_export(info->exports, {"clap_entry"}))
                     return std::optional<std::variant<ClapPlugin, fs::path>>{
                         ClapPlugin{path, arch, subdir}};

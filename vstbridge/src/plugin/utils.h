@@ -67,6 +67,11 @@ struct PluginInfo {
      *   VST3 module in the same bundle, then setting this to true will cause
      *   the 32-bit version to be used instead of the 64-bit version.
      *
+     * When the native ARM64 plugin host is installed, the ARM64 version of a
+     * plugin is used instead of its x86_64 version if there is one: the
+     * `arm64-win` module in a VST3 bundle, or the `<name>.arm64.dll` file
+     * vstbridgectl puts next to a VST2 plugin.
+     *
      * @throw std::runtime_error If we cannot find a corresponding Windows
      *   plugin. The error message contains a human readable description of what
      *   went wrong.
@@ -196,9 +201,10 @@ std::string create_logger_prefix(
     const ghc::filesystem::path& endpoint_base_dir);
 
 /**
- * Finds the Wine plugin host (either `vstbridge-host.exe` or
- * `vstbridge-host-32.exe` depending on the plugin). For this we will search in
- * two places:
+ * Finds the Wine plugin host (`vstbridge-host.exe`, `vstbridge-host-32.exe` or
+ * `vstbridge-host-arm64.exe` depending on the plugin). An ARM64 plugin falls
+ * back to `vstbridge-host.exe` when the native ARM64 host is not installed.
+ * For this we will search in two places:
  *
  *   1. Alongside libvstbridge-{clap,vst2,vst3}.so if the file got symlinked.
  *      This is useful when developing, as you can simply symlink the

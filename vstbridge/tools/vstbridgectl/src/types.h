@@ -21,10 +21,17 @@
 
 namespace fs = std::filesystem;
 
-enum class LibArchitecture { Lib32, Lib64 };
+enum class LibArchitecture { Lib32, Lib64, LibArm64 };
 
 inline std::string arch_to_string(LibArchitecture arch) {
-    return arch == LibArchitecture::Lib32 ? "32-bit" : "64-bit";
+    switch (arch) {
+        case LibArchitecture::Lib32:
+            return "32-bit";
+        case LibArchitecture::LibArm64:
+            return "ARM64";
+        default:
+            return "64-bit";
+    }
 }
 
 // The multiarch triplet and VST3 bundle directory for native libraries on the
@@ -37,9 +44,16 @@ inline constexpr const char* NATIVE_MULTIARCH_TRIPLET = "x86_64-linux-gnu";
 inline constexpr const char* NATIVE_VST3_ARCH_64 = "x86_64-linux";
 #endif
 
-// The x86-win / x86_64-win directory name inside a VST3 bundle
+// The x86-win / x86_64-win / arm64-win directory name inside a VST3 bundle
 inline const char* vst_arch_string(LibArchitecture arch) {
-    return arch == LibArchitecture::Lib32 ? "x86-win" : "x86_64-win";
+    switch (arch) {
+        case LibArchitecture::Lib32:
+            return "x86-win";
+        case LibArchitecture::LibArm64:
+            return "arm64-win";
+        default:
+            return "x86_64-win";
+    }
 }
 
 struct NativeFile {

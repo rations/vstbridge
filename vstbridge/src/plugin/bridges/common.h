@@ -280,6 +280,9 @@ class PluginBridge {
             case LibArchitecture::dll_64:
                 init_msg << ", 64-bit";
                 break;
+            case LibArchitecture::dll_arm64:
+                init_msg << ", ARM64";
+                break;
         }
         init_msg << "'" << std::endl;
 

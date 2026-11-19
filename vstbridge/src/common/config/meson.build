@@ -10,6 +10,7 @@ config_header = configure_file(
       'vst3_plugin_name': 'lib' + vst3_plugin_name + '.so',
       'host_binary_32bit': host_name_32bit + '.exe',
       'host_binary_64bit': host_name_64bit + '.exe',
+      'host_binary_arm64': host_name_arm64 + '.exe',
       'host_is_pe': with_pe_host ? 'true' : 'false',
       'host_32bit_is_pe': (with_pe_host or get_option('pe-bitbridge')) ? 'true' : 'false',
       'default_wine_loader': get_option('wine-loader'),
