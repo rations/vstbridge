@@ -34,6 +34,8 @@ static constexpr const char* VST2_CHAINLOADER_NAME = "libvstbridge-chainloader-v
 static constexpr const char* VST3_CHAINLOADER_NAME = "libvstbridge-chainloader-vst3.so";
 static constexpr const char* VSTBRIDGE_HOST_EXE_NAME = "vstbridge-host.exe";
 static constexpr const char* VSTBRIDGE_HOST_32_EXE_NAME = "vstbridge-host-32.exe";
+// The native ARM64 PE plugin host on aarch64, for ARM64 Windows plugins
+static constexpr const char* VSTBRIDGE_HOST_ARM64_EXE_NAME = "vstbridge-host-arm64.exe";
 // A PE plugin host (aarch64) has no `.exe.so`. Its native code lives in this
 // unixlib next to the executable, e.g. `vstbridge-host-unixlib.so`.
 static constexpr const char* VSTBRIDGE_HOST_UNIXLIB_SUFFIX = "-unixlib.so";
@@ -74,6 +76,8 @@ struct VstbridgeFiles {
     bool vstbridge_host_is_pe = false;
     std::optional<fs::path> vstbridge_host_32_exe;
     std::optional<fs::path> vstbridge_host_32_exe_so;
+    // Only set when its unixlib is installed next to it
+    std::optional<fs::path> vstbridge_host_arm64_exe;
 };
 
 struct Config {

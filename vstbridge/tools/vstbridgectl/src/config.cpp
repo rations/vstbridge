@@ -312,6 +312,12 @@ VstbridgeFiles Config::files() const {
             host_32_exe_so = unixlib;
     }
 
+    auto host_arm64_exe = find_host(VSTBRIDGE_HOST_ARM64_EXE_NAME);
+    if (host_arm64_exe &&
+        !fs::exists(host_arm64_exe->parent_path() /
+                    (host_arm64_exe->stem().string() + VSTBRIDGE_HOST_UNIXLIB_SUFFIX)))
+        host_arm64_exe.reset();
+
     return VstbridgeFiles{
         vst2_chainloader,
         vst2_arch,
@@ -322,6 +328,7 @@ VstbridgeFiles Config::files() const {
         host_is_pe,
         host_32_exe,
         host_32_exe_so,
+        host_arm64_exe,
     };
 }
 
@@ -330,7 +337,7 @@ VstbridgeFiles Config::files() const {
 std::map<const fs::path*, SearchResults> Config::search_directories() const {
     std::map<const fs::path*, SearchResults> results;
     for (const auto& dir : plugin_dirs) {
-        auto sr = index(dir, blacklist).search();
+        auto sr = index(dir, blacklist).search(vst2_location == Vst2InstallationLocation::Centralized);
         results.emplace(&dir, std::move(sr));
     }
     return results;

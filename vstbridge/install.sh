@@ -46,6 +46,8 @@ if [ "$UNINSTALL" -eq 1 ]; then
         "$DATA_DIR"/vstbridge-host-32.exe.so \
         "$DATA_DIR"/vstbridge-host-32-unixlib.so \
         "$DATA_DIR"/vstbridge-host-32-unixlib-i386.so \
+        "$DATA_DIR"/vstbridge-host-arm64.exe \
+        "$DATA_DIR"/vstbridge-host-arm64-unixlib.so \
         "$DATA_DIR"/vstbridgectl \
         "$DATA_DIR"/vstbridgectl-gtk
 
@@ -99,6 +101,8 @@ for f in \
     vstbridge-host-32.exe.so \
     vstbridge-host-32-unixlib.so \
     vstbridge-host-32-unixlib-i386.so \
+    vstbridge-host-arm64.exe \
+    vstbridge-host-arm64-unixlib.so \
     vstbridgectl \
     vstbridgectl-gtk
 do

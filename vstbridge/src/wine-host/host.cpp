@@ -38,6 +38,8 @@ static const std::string host_name = "vstbridge host version " +
                                      std::string(vstbridge_git_version)
 #ifdef __i386__
                                      + " (32-bit compatibility mode)"
+#elif defined(__aarch64__)
+                                     + " (ARM64)"
 #endif
     ;
 
@@ -93,6 +95,8 @@ int VSTBRIDGE_EXPORT
         std::cerr << "Usage: "
 #ifdef __i386__
                   << vstbridge_host_name_32bit
+#elif defined(__aarch64__)
+                  << vstbridge_host_name_arm64
 #else
                   << vstbridge_host_name
 #endif
@@ -102,6 +106,8 @@ int VSTBRIDGE_EXPORT
         std::cerr << "       "
 #ifdef __i386__
                   << vstbridge_host_name_32bit
+#elif defined(__aarch64__)
+                  << vstbridge_host_name_arm64
 #else
                   << vstbridge_host_name
 #endif

@@ -45,6 +45,9 @@ endif
 # A PE host built for x86 is the 32-bit bitbridge host, see the `pe-bitbridge`
 # option
 with_32bit_pe_host = with_pe_host and host_machine.cpu_family() == 'x86'
+# A PE host built for plain aarch64 instead of ARM64EC is the native ARM64 host,
+# see cross-mingw-aarch64.conf
+with_arm64_pe_host = with_pe_host and host_machine.cpu_family() == 'aarch64' and host_machine.cpu() != 'arm64ec'
 
 # Cookies can't be stored correctly when the native host is 32-bit and the
 # bridged plugin is 64-bit
@@ -71,6 +74,7 @@ vst2_plugin_name = 'vstbridge-vst2'
 vst3_plugin_name = 'vstbridge-vst3'
 host_name_64bit = 'vstbridge-host'
 host_name_32bit = 'vstbridge-host-32'
+host_name_arm64 = 'vstbridge-host-arm64'
 
 compiler_options = [
   '-fvisibility=hidden',
@@ -482,7 +486,12 @@ if with_64bit_host
 endif
 
 if with_pe_host
-  pe_host_name = with_32bit_pe_host ? host_name_32bit : host_name_64bit
+  pe_host_name = host_name_64bit
+  if with_32bit_pe_host
+    pe_host_name = host_name_32bit
+  elif with_arm64_pe_host
+    pe_host_name = host_name_arm64
+  endif
   executable(
     pe_host_name,
     host_pe_sources,

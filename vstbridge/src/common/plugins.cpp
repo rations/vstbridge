@@ -58,10 +58,11 @@ LibArchitecture find_dll_architecture(const fs::path& plugin_path) {
             return LibArchitecture::dll_64;
             break;
 #ifdef __aarch64__
-        // On ARM the 64-bit host is an ARM64EC process, which can also load
-        // ARM64X (hybrid) plugins. Pure ARM64 plugins will fail to load there.
+        // These go to the native ARM64 host when it's installed. Otherwise
+        // they go to the 64-bit host, an ARM64EC process that can load ARM64X
+        // (hybrid) plugins but not pure ARM64 ones. See `find_plugin_host()`.
         case 0xaa64:  // IMAGE_FILE_MACHINE_ARM64
-            return LibArchitecture::dll_64;
+            return LibArchitecture::dll_arm64;
             break;
 #endif
     }

@@ -25,6 +25,9 @@ namespace fs = std::filesystem;
 struct Pe32Info {
     std::vector<std::string> exports;
     bool is_64_bit;
+    // A pure ARM64 or ARM64X binary. ARM64EC binaries use the x86_64 machine
+    // type and are not marked here.
+    bool is_arm64 = false;
 };
 
 // Parse a Windows PE32(+) binary and return its exported symbol names and

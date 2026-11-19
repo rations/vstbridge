@@ -122,6 +122,7 @@ Pe32Info parse_pe32_native(const fs::path& path) {
     // 0x8664 = IMAGE_FILE_MACHINE_AMD64 (64-bit, also used by ARM64EC)
     // 0xAA64 = IMAGE_FILE_MACHINE_ARM64 (64-bit, including ARM64X)
     bool is_64 = (coff.machine == 0x8664 || coff.machine == 0xAA64);
+    bool is_arm64 = coff.machine == 0xAA64;
 
     // Optional header starts right after COFF header
     size_t opt_off = coff_off + sizeof(COFFHeader);
@@ -142,7 +143,7 @@ Pe32Info parse_pe32_native(const fs::path& path) {
     uint32_t export_size = read_at<uint32_t>(data, export_dir_rva_off + 4);
 
     if (export_rva == 0 || export_size == 0)
-        return Pe32Info{{}, is_64};
+        return Pe32Info{{}, is_64, is_arm64};
 
     // Section headers follow the optional header
     size_t sections_off = opt_off + coff.opt_header_size;
@@ -154,7 +155,7 @@ Pe32Info parse_pe32_native(const fs::path& path) {
     ExportDirectory exp = read_at<ExportDirectory>(data, export_file_off);
 
     if (exp.num_names == 0)
-        return Pe32Info{{}, is_64};
+        return Pe32Info{{}, is_64, is_arm64};
 
     // Read the array of name RVAs
     uint32_t names_file_off = rva_to_offset(exp.addr_of_names, sections);
@@ -171,7 +172,7 @@ Pe32Info parse_pe32_native(const fs::path& path) {
         exports.push_back(std::move(name));
     }
 
-    return Pe32Info{std::move(exports), is_64};
+    return Pe32Info{std::move(exports), is_64, is_arm64};
 }
 
 // Fallback: invoke winedump and parse its output
@@ -221,6 +222,7 @@ Pe32Info parse_pe32_winedump(const fs::path& path) {
     // Determine machine type from basic info
     std::string basic = run_winedump({});
     bool is_64 = true;
+    bool is_arm64 = false;
     bool found_machine = false;
     std::istringstream bi(basic);
     std::string line;
@@ -235,6 +237,7 @@ Pe32Info parse_pe32_winedump(const fs::path& path) {
         if (start != std::string::npos)
             rest = rest.substr(start);
         is_64 = rest.substr(0, 4) != "014C";
+        is_arm64 = rest.substr(0, 4) == "AA64";
         found_machine = true;
         break;
     }
@@ -269,7 +272,7 @@ Pe32Info parse_pe32_winedump(const fs::path& path) {
         }
     }
 
-    return Pe32Info{std::move(exports), is_64};
+    return Pe32Info{std::move(exports), is_64, is_arm64};
 }
 
 }  // namespace

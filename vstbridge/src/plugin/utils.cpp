@@ -41,6 +41,47 @@ fs::path normalize_plugin_path(const fs::path& windows_library_path,
 std::variant<OverridenWinePrefix, fs::path, DefaultWinePrefix> find_wine_prefix(
     fs::path windows_plugin_path);
 
+/**
+ * Find a plugin host with a specific file name, see `find_plugin_host()`.
+ */
+static std::optional<fs::path> find_host_by_name(
+    const fs::path& this_plugin_path,
+    const char* host_name) {
+    // If our `.so` file is a symlink, then search for the host in the directory
+    // of the file that symlink points to
+    fs::path host_path =
+        fs::canonical(this_plugin_path).remove_filename() / host_name;
+    if (fs::exists(host_path)) {
+        return host_path;
+    }
+
+    // With the chainloaders, `this_plugin_path` is the chainloader's copy, and
+    // this library was loaded from wherever vstbridge is installed. A
+    // system-wide install keeps the host next to the plugin libraries (e.g. in
+    // `/usr/lib/aarch64-linux-gnu`), which is not in the search path.
+    host_path =
+        fs::canonical(get_this_file_location()).remove_filename() / host_name;
+    if (fs::exists(host_path)) {
+        return host_path;
+    }
+
+    return search_in_path(get_augmented_search_path(), host_name);
+}
+
+/**
+ * Whether the native ARM64 plugin host is installed. Without it ARM64 plugins
+ * can't be loaded, so the x86_64 version of a plugin is used instead.
+ */
+static bool has_arm64_host(const fs::path& this_plugin_path) {
+#ifdef __aarch64__
+    return find_host_by_name(this_plugin_path, vstbridge_host_name_arm64)
+        .has_value();
+#else
+    (void)this_plugin_path;
+    return false;
+#endif
+}
+
 PluginInfo::PluginInfo(PluginType plugin_type,
                        const ghc::filesystem::path& plugin_path,
                        bool prefer_32bit_vst3)
@@ -200,6 +241,17 @@ fs::path find_plugin_library(const fs::path& this_plugin_path,
         case PluginType::vst2: {
             fs::path plugin_path(this_plugin_path);
             plugin_path.replace_extension(".dll");
+
+            // vstbridgectl puts the ARM64 version of a plugin next to its
+            // x86_64 version as `<name>.arm64.dll`. It's preferred when the
+            // native ARM64 host is installed.
+            fs::path arm64_plugin_path(this_plugin_path);
+            arm64_plugin_path.replace_extension(".arm64.dll");
+            if (fs::exists(arm64_plugin_path) &&
+                has_arm64_host(this_plugin_path)) {
+                return fs::canonical(arm64_plugin_path);
+            }
+
             if (fs::exists(plugin_path)) {
                 // Also resolve symlinks here, to support symlinked .dll files
                 return fs::canonical(plugin_path);
@@ -260,6 +312,12 @@ fs::path find_plugin_library(const fs::path& this_plugin_path,
                 bundle_home / "Contents" / "x86_64-win" / win_module_name;
             const fs::path candidate_path_32bit =
                 bundle_home / "Contents" / "x86-win" / win_module_name;
+            // The ARM64 version of the plugin is preferred over the x86_64 one
+            // when the native ARM64 host is installed
+            const fs::path candidate_path_arm64 =
+                bundle_home / "Contents" / "arm64-win" / win_module_name;
+            const bool use_arm64 = fs::exists(candidate_path_arm64) &&
+                                   has_arm64_host(this_plugin_path);
 
             // After this we'll have to use `normalize_plugin_path()` to get the
             // actual module entry point in case the plugin is using a VST
@@ -270,10 +328,14 @@ fs::path find_plugin_library(const fs::path& this_plugin_path,
             // NOLINTNEXTLINE(bugprone-branch-clone)
             if (prefer_32bit_vst3 && fs::exists(candidate_path_32bit)) {
                 return fs::canonical(candidate_path_32bit);
+            } else if (use_arm64) {
+                return fs::canonical(candidate_path_arm64);
             } else if (fs::exists(candidate_path_64bit)) {
                 return fs::canonical(candidate_path_64bit);
             } else if (fs::exists(candidate_path_32bit)) {
                 return fs::canonical(candidate_path_32bit);
+            } else if (fs::exists(candidate_path_arm64)) {
+                return fs::canonical(candidate_path_arm64);
             }
 
             throw std::runtime_error(
@@ -373,28 +435,18 @@ fs::path find_plugin_host(const ghc::filesystem::path& this_plugin_path,
     auto host_name = vstbridge_host_name;
     if (plugin_arch == LibArchitecture::dll_32) {
         host_name = vstbridge_host_name_32bit;
-    }
-
-    // If our `.so` file is a symlink, then search for the host in the directory
-    // of the file that symlink points to
-    fs::path host_path =
-        fs::canonical(this_plugin_path).remove_filename() / host_name;
-    if (fs::exists(host_path)) {
-        return host_path;
-    }
-
-    // With the chainloaders, `this_plugin_path` is the chainloader's copy, and
-    // this library was loaded from wherever vstbridge is installed. A
-    // system-wide install keeps the host next to the plugin libraries (e.g. in
-    // `/usr/lib/aarch64-linux-gnu`), which is not in the search path.
-    host_path =
-        fs::canonical(get_this_file_location()).remove_filename() / host_name;
-    if (fs::exists(host_path)) {
-        return host_path;
+    } else if (plugin_arch == LibArchitecture::dll_arm64) {
+        // Without the native ARM64 host this falls back to the 64-bit host.
+        // On aarch64 that's an ARM64EC process, which can still load ARM64X
+        // (hybrid) plugins.
+        if (const std::optional<fs::path> arm64_host_path = find_host_by_name(
+                this_plugin_path, vstbridge_host_name_arm64)) {
+            return *arm64_host_path;
+        }
     }
 
     if (const std::optional<fs::path> plugin_host_path =
-            search_in_path(get_augmented_search_path(), host_name)) {
+            find_host_by_name(this_plugin_path, host_name)) {
         return *plugin_host_path;
     } else {
         throw std::runtime_error("Could not locate '" + std::string(host_name) +
@@ -417,6 +469,9 @@ ghc::filesystem::path generate_group_endpoint(
             break;
         case LibArchitecture::dll_64:
             socket_name << "x64";
+            break;
+        case LibArchitecture::dll_arm64:
+            socket_name << "arm64";
             break;
     }
     socket_name << ".sock";

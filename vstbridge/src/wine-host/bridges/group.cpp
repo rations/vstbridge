@@ -424,6 +424,8 @@ std::string create_logger_prefix(const fs::path& socket_path) {
         // and regular 64-bit group processes with the same name running
         // alongside eachother
         socket_name += "-x32";
+#elif defined(__aarch64__)
+        socket_name += "-arm64";
 #endif
     }
 
